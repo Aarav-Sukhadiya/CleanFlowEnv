@@ -1,0 +1,15 @@
+__pycache__
+*.pyc
+*.pyo
+.env
+.git
+.gitignore
+tests/
+*.egg-info
+.venv
+.pytest_cache
+.mypy_cache
+Workflow/
+simulate.py
+validate_submission.py
+smoke_test.py

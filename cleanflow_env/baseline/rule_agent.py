@@ -1,0 +1,204 @@
+from __future__ import annotations
+
+from typing import Any, Dict, List, Optional, Tuple
+
+from cleanflow_env.models.action import ActionModel
+from cleanflow_env.models.observation import ObservationModel
+
+
+class RuleBasedAgent:
+    """
+    A deterministic, rule-based agent for CleanFlowEnv.
+
+    Decision priority:
+    1. Drop duplicates if any exist
+    2. Fill nulls using column descriptions to pick method
+    3. Strip whitespace on string columns that mention it
+    4. Replace substrings (e.g. "$", ",") on columns that mention it
+    5. Map categorical values (e.g. "yes"/"no" → True/False)
+    6. Convert types based on column descriptions
+    7. Remove outliers on numeric columns
+    """
+
+    def __init__(self) -> None:
+        self.action_history: List[Dict[str, Optional[str]]] = []
+
+    def _is_done(self, action_type: str, column: Optional[str]) -> bool:
+        """Check if this action was already performed."""
+        for prev in self.action_history:
+            if prev["action_type"] == action_type and prev["column"] == column:
+                return True
+        return False
+
+    def _record(self, action_type: str, column: Optional[str]) -> None:
+        self.action_history.append({"action_type": action_type, "column": column})
+
+    def _pick_fill_method(
+        self, col: str, descriptions: Dict[str, str], schema: Dict[str, str]
+    ) -> tuple[str, Any]:
+        """Use column descriptions to pick the best fill method.
+
+        Returns (method, constant_value) — constant_value is only used when method == "constant".
+        """
+        desc = descriptions.get(col, "").lower()
+        dtype = schema.get(col, "string")
+
+        # Constant "Unknown" for identifiers and categorical strings
+        if any(kw in desc for kw in ["constant", "'unknown'", '"unknown"']):
+            return "constant", "Unknown"
+        if dtype == "string" and any(
+            kw in desc for kw in ["identifier", "name", "id"]
+        ):
+            if "no cleaning" not in desc and "no action" not in desc:
+                return "constant", "Unknown"
+
+        # Forward-fill for date/time columns
+        if any(kw in desc for kw in ["forward fill", "forward-fill", "ffill"]):
+            return "forward_fill", None
+        if dtype in ("datetime", "string") and any(
+            kw in desc for kw in ["date", "datetime"]
+        ):
+            if "missing" in desc or "null" in desc:
+                return "forward_fill", None
+
+        # Explicit method hints
+        if any(kw in desc for kw in ["mean", "average"]):
+            return "mean", None
+        if any(kw in desc for kw in ["mode", "category", "categorical"]):
+            return "mode", None
+
+        # Default to median — more robust to outliers than mean
+        return "median", None
+
+    def act(self, obs: ObservationModel) -> Optional[ActionModel]:
+        """Return the next action or None if all useful actions are exhausted."""
+
+        # Priority 1: Drop duplicates whenever they exist.
+        # Checked at the top of every step because null-filling can CREATE new
+        # duplicates (rows that differed only by NaN become identical after fill).
+        if obs.duplicate_count > 0:
+            action = ActionModel(action_type="drop_duplicates")
+            self._record("drop_duplicates", None)
+            return action
+
+        # Priority 2: Fill nulls
+        for col, count in obs.null_counts.items():
+            if count > 0 and not self._is_done("fill_null", col):
+                method, constant_value = self._pick_fill_method(
+                    col, obs.column_descriptions, obs.table_schema
+                )
+                action = ActionModel(
+                    action_type="fill_null",
+                    column=col,
+                    method=method,
+                    constant_value=constant_value,
+                )
+                self._record("fill_null", col)
+                return action
+
+        # Priority 3: Strip whitespace on columns that mention it
+        for col, dtype in obs.table_schema.items():
+            desc = obs.column_descriptions.get(col, "").lower()
+            if dtype == "string" and "whitespace" in desc:
+                if not self._is_done("strip_whitespace", col):
+                    action = ActionModel(
+                        action_type="strip_whitespace", column=col
+                    )
+                    self._record("strip_whitespace", col)
+                    return action
+
+        # Priority 4: Replace substrings (currency symbols, commas, year typos)
+        for col, dtype in obs.table_schema.items():
+            desc = obs.column_descriptions.get(col, "").lower()
+            if dtype == "string":
+                # Currency: remove $ and , before numeric conversion
+                if any(kw in desc for kw in ["'$'", '"$"', "currency", "usd"]) and "'$'" in desc or '"$"' in desc or ("$" in desc and "string" in desc):
+                    if not self._is_done("replace_substring_dollar", col):
+                        action = ActionModel(
+                            action_type="replace_substring",
+                            column=col,
+                            old_value="$",
+                            new_value="",
+                        )
+                        self._record("replace_substring_dollar", col)
+                        return action
+                    if not self._is_done("replace_substring_comma", col):
+                        action = ActionModel(
+                            action_type="replace_substring",
+                            column=col,
+                            old_value=",",
+                            new_value="",
+                        )
+                        self._record("replace_substring_comma", col)
+                        return action
+
+                # Year typos: 2033 → 2023
+                if "2033" in desc and "2023" in desc:
+                    if not self._is_done("replace_substring", col):
+                        action = ActionModel(
+                            action_type="replace_substring",
+                            column=col,
+                            old_value="2033",
+                            new_value="2023",
+                        )
+                        self._record("replace_substring", col)
+                        return action
+
+        # Priority 5: Map categorical values (boolean-like columns)
+        for col, dtype in obs.table_schema.items():
+            desc = obs.column_descriptions.get(col, "").lower()
+            if "boolean" in desc or ("map to boolean" in desc) or ("yes" in desc and "no" in desc and "date" not in desc):
+                if dtype == "string" and not self._is_done("map_values", col):
+                    action = ActionModel(
+                        action_type="map_values",
+                        column=col,
+                        mapping={
+                            "yes": True, "Yes": True, "YES": True,
+                            "no": False, "No": False, "NO": False,
+                            "true": True, "True": True, "TRUE": True,
+                            "false": False, "False": False, "FALSE": False,
+                            "1": True, "0": False,
+                        },
+                    )
+                    self._record("map_values", col)
+                    return action
+
+        # Priority 6: Convert types based on descriptions
+        for col, dtype in obs.table_schema.items():
+            desc = obs.column_descriptions.get(col, "").lower()
+            if dtype == "string":
+                if "datetime" in desc and "no cleaning" not in desc and "no action" not in desc and "no conversion" not in desc and "no type conversion" not in desc:
+                    if not self._is_done("convert_type", col):
+                        action = ActionModel(
+                            action_type="convert_type",
+                            column=col,
+                            target_type="datetime",
+                        )
+                        self._record("convert_type", col)
+                        return action
+                if any(kw in desc for kw in ["numeric", "float", "price", "amount", "usd", "$"]):
+                    if not self._is_done("convert_type", col):
+                        action = ActionModel(
+                            action_type="convert_type",
+                            column=col,
+                            target_type="float",
+                        )
+                        self._record("convert_type", col)
+                        return action
+
+        # Priority 7: Remove outliers on numeric columns mentioned in descriptions
+        for col, dtype in obs.table_schema.items():
+            desc = obs.column_descriptions.get(col, "").lower()
+            if dtype in ("float", "int") and "outlier" in desc:
+                if not self._is_done("remove_outliers", col):
+                    action = ActionModel(
+                        action_type="remove_outliers", column=col
+                    )
+                    self._record("remove_outliers", col)
+                    return action
+
+        return None
+
+    def reset(self) -> None:
+        """Clear action history for a new episode."""
+        self.action_history = []

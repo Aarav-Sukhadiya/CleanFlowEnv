@@ -1,0 +1,229 @@
+from __future__ import annotations
+
+import pandas as pd
+
+from cleanflow_env.models.action import ActionModel
+
+
+class InvalidActionError(Exception):
+    """Raised when an action cannot be applied to the current table."""
+
+    pass
+
+
+def fill_null(
+    df: pd.DataFrame, column: str, method: str, constant_value=None
+) -> pd.DataFrame:
+    """Fill null values in the specified column using the given method."""
+    result = df.copy()
+    if column not in result.columns:
+        raise InvalidActionError(f"Column '{column}' not found in table.")
+
+    col = result[column]
+    if method == "mean":
+        result[column] = col.fillna(col.mean())
+    elif method == "median":
+        result[column] = col.fillna(col.median())
+    elif method == "mode":
+        mode_vals = col.mode()
+        if len(mode_vals) == 0:
+            raise InvalidActionError(
+                f"Cannot compute mode for column '{column}' — all values are null."
+            )
+        result[column] = col.fillna(mode_vals.iloc[0])
+    elif method == "constant":
+        result[column] = col.fillna(constant_value)
+    elif method == "forward_fill":
+        result[column] = col.ffill().bfill()  # bfill fallback for leading NaNs
+    elif method == "backward_fill":
+        result[column] = col.bfill().ffill()  # ffill fallback for trailing NaNs
+    else:
+        raise InvalidActionError(f"Unknown fill method '{method}'.")
+    return result
+
+
+def drop_duplicates(df: pd.DataFrame) -> pd.DataFrame:
+    """Drop all fully duplicate rows and reset the index."""
+    return df.drop_duplicates().reset_index(drop=True)
+
+
+def convert_type(df: pd.DataFrame, column: str, target_type: str) -> pd.DataFrame:
+    """Convert the specified column to the target data type."""
+    result = df.copy()
+    if column not in result.columns:
+        raise InvalidActionError(f"Column '{column}' not found in table.")
+
+    if target_type == "datetime":
+        result[column] = pd.to_datetime(result[column], errors="coerce", format="mixed")
+    elif target_type in ("int", "float"):
+        result[column] = pd.to_numeric(result[column], errors="coerce")
+        if target_type == "int":
+            result[column] = result[column].astype("Int64")
+    elif target_type == "string":
+        result[column] = result[column].astype(str)
+    else:
+        raise InvalidActionError(f"Unknown target type '{target_type}'.")
+    return result
+
+
+def normalize(df: pd.DataFrame, column: str, method: str = "minmax") -> pd.DataFrame:
+    """Normalize the specified numeric column using minmax or zscore."""
+    result = df.copy()
+    if column not in result.columns:
+        raise InvalidActionError(f"Column '{column}' not found in table.")
+
+    col = pd.to_numeric(result[column], errors="coerce")
+    if method == "minmax":
+        col_min, col_max = col.min(), col.max()
+        if col_max == col_min:
+            result[column] = 0.0
+        else:
+            result[column] = (col - col_min) / (col_max - col_min)
+    elif method == "zscore":
+        col_std = col.std()
+        if col_std == 0:
+            result[column] = 0.0
+        else:
+            result[column] = (col - col.mean()) / col_std
+    else:
+        raise InvalidActionError(f"Unknown normalization method '{method}'.")
+    return result
+
+
+def remove_outliers(
+    df: pd.DataFrame, column: str, method: str = "iqr", threshold: float = 1.5
+) -> pd.DataFrame:
+    """Remove outliers using IQR or Z-score method.
+
+    Methods:
+    - iqr (default): Remove values outside Q1 - threshold*IQR .. Q3 + threshold*IQR
+    - zscore: Remove values with |z-score| > threshold (default threshold=3.0 for zscore)
+    """
+    result = df.copy()
+    if column not in result.columns:
+        raise InvalidActionError(f"Column '{column}' not found in table.")
+
+    col = pd.to_numeric(result[column], errors="coerce")
+
+    if method == "iqr":
+        q1 = col.quantile(0.25)
+        q3 = col.quantile(0.75)
+        iqr = q3 - q1
+        lower = q1 - threshold * iqr
+        upper = q3 + threshold * iqr
+        mask = (col >= lower) & (col <= upper) | col.isna()
+    elif method == "zscore":
+        mean = col.mean()
+        std = col.std()
+        if std == 0:
+            mask = pd.Series(True, index=result.index)
+        else:
+            z = (col - mean).abs() / std
+            mask = (z <= threshold) | col.isna()
+    else:
+        raise InvalidActionError(
+            f"Unknown outlier method '{method}'. Use 'iqr' or 'zscore'."
+        )
+
+    return result[mask].reset_index(drop=True)
+
+
+def strip_whitespace(df: pd.DataFrame, column: str) -> pd.DataFrame:
+    """Strip leading and trailing whitespace from string values in a column."""
+    result = df.copy()
+    if column not in result.columns:
+        raise InvalidActionError(f"Column '{column}' not found in table.")
+
+    if result[column].dtype == "object":
+        result[column] = result[column].str.strip()
+    else:
+        # Convert to string, strip, convert back — handles mixed-type columns
+        result[column] = result[column].astype(str).str.strip()
+    return result
+
+
+def map_values(
+    df: pd.DataFrame, column: str, mapping: dict
+) -> pd.DataFrame:
+    """Map categorical values in a column using a provided mapping dict.
+
+    Example mapping: {"yes": True, "no": False, "Yes": True, "No": False}
+    Values not in the mapping are left unchanged.
+    """
+    result = df.copy()
+    if column not in result.columns:
+        raise InvalidActionError(f"Column '{column}' not found in table.")
+
+    if not mapping:
+        raise InvalidActionError("map_values requires a non-empty 'mapping' dict.")
+
+    def _map_val(v):
+        if pd.isna(v):
+            return v
+        # Try exact match first, then string representation
+        if v in mapping:
+            return mapping[v]
+        str_v = str(v)
+        if str_v in mapping:
+            return mapping[str_v]
+        return v
+
+    result[column] = result[column].map(_map_val)
+    return result
+
+
+def replace_substring(
+    df: pd.DataFrame, column: str, old: str, new: str
+) -> pd.DataFrame:
+    """Replace occurrences of a substring within string values of a column.
+
+    Example: replace_substring(df, "price", "$", "") to remove dollar signs.
+    """
+    result = df.copy()
+    if column not in result.columns:
+        raise InvalidActionError(f"Column '{column}' not found in table.")
+
+    if result[column].dtype != "object":
+        result[column] = result[column].astype(str)
+
+    result[column] = result[column].str.replace(old, new, regex=False)
+    return result
+
+
+# Dispatch dict for O(1) action routing
+_ACTION_DISPATCH = {
+    "fill_null": lambda df, action: fill_null(
+        df, action.column, action.method, action.constant_value
+    ),
+    "drop_duplicates": lambda df, action: drop_duplicates(df),
+    "convert_type": lambda df, action: convert_type(
+        df, action.column, action.target_type
+    ),
+    "normalize": lambda df, action: normalize(df, action.column),
+    "remove_outliers": lambda df, action: remove_outliers(
+        df, action.column, action.outlier_method or "iqr", action.outlier_threshold or 1.5
+    ),
+    "strip_whitespace": lambda df, action: strip_whitespace(df, action.column),
+    "map_values": lambda df, action: map_values(
+        df, action.column, action.mapping or {}
+    ),
+    "replace_substring": lambda df, action: replace_substring(
+        df, action.column, action.old_value or "", action.new_value or ""
+    ),
+}
+
+
+def apply_action(df: pd.DataFrame, action: ActionModel) -> pd.DataFrame:
+    """Dispatch an ActionModel to the correct cleaning function."""
+    handler = _ACTION_DISPATCH.get(action.action_type)
+    if handler is None:
+        raise InvalidActionError(
+            f"Unknown action type '{action.action_type}'. "
+            f"Valid types: {list(_ACTION_DISPATCH.keys())}"
+        )
+    try:
+        return handler(df, action)
+    except InvalidActionError:
+        raise
+    except Exception as e:
+        raise InvalidActionError(f"Action failed: {e}") from e

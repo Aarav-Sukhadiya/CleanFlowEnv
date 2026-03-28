@@ -1,0 +1,108 @@
+name: CleanFlowEnv
+version: "2.0"
+description: >
+  An OpenEnv-compliant environment for evaluating AI agents on
+  real-world data cleaning and ETL workflows. Agents iteratively
+  transform messy datasets into clean, analysis-ready tables using
+  structured actions with budget constraints.
+tags:
+  - openenv
+  - data-cleaning
+  - etl
+  - tabular
+
+endpoints:
+  reset:
+    path: /reset
+    method: POST
+  step:
+    path: /step
+    method: POST
+  state:
+    path: /state
+    method: GET
+  tasks:
+    path: /tasks
+    method: GET
+  grader:
+    path: /grader
+    method: GET
+  baseline:
+    path: /baseline
+    method: POST
+
+tasks:
+  - id: task_easy
+    name: Basic Cleaning
+    difficulty: easy
+    description: "Fill missing values and remove duplicates in employee survey data (200 rows, 5 columns)."
+    budget: 20
+    expected_baseline_score: 0.90
+  - id: task_medium
+    name: Schema Normalization
+    difficulty: medium
+    description: "Convert mixed-format dates, currency strings, and boolean variants in transaction data (300 rows, 6 columns)."
+    budget: 20
+    expected_baseline_score: 0.70
+  - id: task_hard
+    name: Advanced Cleaning
+    difficulty: hard
+    description: "Remove outliers, normalize IDs, and fix date typos in medical trial records (400 rows, 8 columns)."
+    budget: 20
+    expected_baseline_score: 0.45
+  - id: task_expert
+    name: Budget-Constrained Cleaning
+    difficulty: expert
+    description: "All issue types combined with distractor columns under a tight 15-credit budget (500 rows, 10 columns)."
+    budget: 15
+    expected_baseline_score: 0.30
+
+score_range: [0.0, 1.0]
+deterministic: true
+random_seed: 42
+
+scoring:
+  formula: "0.4 * correctness + 0.3 * completeness + 0.2 * efficiency + 0.1 * action_quality"
+  components:
+    correctness:
+      weight: 0.4
+      description: "Fraction of cells matching ground truth"
+    completeness:
+      weight: 0.3
+      description: "1.0 if no nulls and no duplicates, scaled otherwise"
+    efficiency:
+      weight: 0.2
+      description: "1 - (budget_used / total_budget)"
+    action_quality:
+      weight: 0.1
+      description: "1 - (redundant_actions / total_actions)"
+
+action_types:
+  fill_null:
+    required_fields: [column, method]
+    cost: 1
+    methods: [mean, median, mode, constant, forward_fill, backward_fill]
+  drop_duplicates:
+    required_fields: []
+    cost: 1
+  strip_whitespace:
+    required_fields: [column]
+    cost: 1
+  replace_substring:
+    required_fields: [column, old_value, new_value]
+    cost: 1
+  convert_type:
+    required_fields: [column, target_type]
+    cost: 2
+    target_types: [int, float, datetime, string]
+  map_values:
+    required_fields: [column, mapping]
+    cost: 2
+  normalize:
+    required_fields: [column]
+    cost: 2
+    methods: [minmax, zscore]
+  remove_outliers:
+    required_fields: [column]
+    cost: 3
+    rule: "IQR x 1.5 exclusively"
