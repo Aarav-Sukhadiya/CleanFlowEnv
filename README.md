@@ -71,10 +71,10 @@ Termination: max 20 steps, budget exhausted, or perfect quality (1.0).
 
 | Task ID | Difficulty | Dataset | Key Issues | Budget | Baseline Score |
 |---------|-----------|---------|------------|--------|---------------|
-| `task_easy` | Easy | Employee survey (200 rows) | Missing values, duplicates | 20 | ~0.90 |
-| `task_medium` | Medium | Transactions (300 rows) | Mixed date formats, currency strings, mixed booleans | 20 | ~0.70 |
-| `task_hard` | Hard | Medical trials (400 rows) | Outliers, mixed ID formats, year typos | 20 | ~0.45 |
-| `task_expert` | Expert | E-commerce catalog (500 rows) | All issues + distractor columns | 15 | ~0.30 |
+| `task_easy` | Easy | Employee survey (200 rows) | Missing values, duplicates | 20 | ~0.94 |
+| `task_medium` | Medium | Transactions (300 rows) | Mixed date formats, currency strings, mixed booleans | 20 | ~0.92 |
+| `task_hard` | Hard | Medical trials (400 rows) | Outliers, mixed ID formats, year typos | 20 | ~0.88 |
+| `task_expert` | Expert | E-commerce catalog (500 rows) | All issues + distractor columns | 15 | ~0.88 |
 
 ## Quickstart
 
@@ -119,11 +119,11 @@ curl -X POST http://localhost:7860/baseline
 
 | Task | Expected Score |
 |------|---------------|
-| Task 1 (Easy) | ~0.90 |
-| Task 2 (Medium) | ~0.70 |
-| Task 3 (Hard) | ~0.45 |
-| Task 4 (Expert) | ~0.30 |
-| **Average** | **~0.59** |
+| Task 1 (Easy) | ~0.94 |
+| Task 2 (Medium) | ~0.92 |
+| Task 3 (Hard) | ~0.88 |
+| Task 4 (Expert) | ~0.88 |
+| **Average** | **~0.91** |
 
 ## Project Structure
 
@@ -133,7 +133,7 @@ cleanflow_env/
 │   └── main.py              # FastAPI endpoints
 ├── baseline/
 │   ├── rule_agent.py         # Rule-based deterministic agent
-│   └── run_baseline.py       # Baseline runner (rule-based + OpenAI)
+│   └── run_baseline.py       # Baseline runner (rule-based)
 ├── env/
 │   ├── actions.py            # Cleaning functions + dispatcher
 │   ├── budget.py             # Budget cost table
