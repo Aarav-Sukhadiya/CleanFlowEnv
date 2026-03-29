@@ -14,9 +14,12 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+import gradio as gr
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+
+from cleanflow_env.api.dashboard import create_dashboard
 
 from cleanflow_env.baseline.run_baseline import run_baseline_all
 from cleanflow_env.env.environment import CleanFlowEnv
@@ -178,5 +181,11 @@ def baseline(_req: BaselineRequest = BaselineRequest()):
         return results
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Gradio Dashboard ---
+# Mounted at /dashboard — the visual demo for judges
+dashboard = create_dashboard()
+app = gr.mount_gradio_app(app, dashboard, path="/dashboard")
 
 
