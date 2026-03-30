@@ -134,6 +134,34 @@ class TestStepBeforeResetRaises:
             fresh_env.step({"action_type": "drop_duplicates"})
 
 
+class TestSequentialFillEasyTask:
+    """Verify sequential fill is used for the name column in task_easy."""
+
+    def test_no_unknown_in_name_column(self, env):
+        """After running baseline on task_easy, name column should have no 'Unknown' values."""
+        obs = env.reset("task_easy")
+        agent = RuleBasedAgent()
+        done = False
+        while not done:
+            action = agent.act(obs)
+            if action is None:
+                break
+            obs, reward = env.step(action.model_dump())
+            done = reward.done
+
+        names = env._state.current_table["name"]
+        assert not names.isna().any(), "Name column still has nulls"
+        assert (names != "Unknown").all(), "Name column should use sequential fill, not 'Unknown'"
+
+    def test_ground_truth_has_sequential_names(self):
+        """Ground truth should fill name nulls with Employee_NNN pattern, not 'Unknown'."""
+        import re
+        _, gt, _, _ = generate_easy_task()
+        assert (gt["name"] != "Unknown").all(), "GT should not have 'Unknown' in name column"
+        assert all(re.match(r"^Employee_\d{3}$", v) for v in gt["name"]), \
+            "All GT names should match Employee_NNN pattern"
+
+
 class TestDeterminism:
     """Verify that the environment is fully deterministic."""
 

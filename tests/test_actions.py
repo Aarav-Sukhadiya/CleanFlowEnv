@@ -9,6 +9,7 @@ from cleanflow_env.env.actions import (
     convert_type,
     drop_duplicates,
     fill_null,
+    fill_sequential,
     normalize,
     remove_outliers,
 )
@@ -56,6 +57,31 @@ class TestFillNull:
         assert result.loc[1, "x"] == 1.0
         assert result.loc[2, "x"] == 1.0
 
+    def test_sequential_fill_gaps(self):
+        """Sequential fill should fill gaps before extending past max."""
+        df = pd.DataFrame({"x": ["Emp_1", "Emp_2", None, "Emp_4", "Emp_5"]})
+        result = fill_null(df, "x", "sequential")
+        assert result.loc[2, "x"] == "Emp_3"
+
+    def test_sequential_fill_zero_padded(self):
+        """Sequential fill should preserve zero-padding format."""
+        df = pd.DataFrame({"x": ["Employee_000", "Employee_001", None, "Employee_003"]})
+        result = fill_null(df, "x", "sequential")
+        assert result.loc[2, "x"] == "Employee_002"
+
+    def test_sequential_fill_extends_past_max(self):
+        """When more nulls than gaps, should extend past max."""
+        df = pd.DataFrame({"x": ["A_1", None, None, "A_3"]})
+        result = fill_null(df, "x", "sequential")
+        assert result.loc[1, "x"] == "A_2"  # gap
+        assert result.loc[2, "x"] == "A_4"  # extension
+
+    def test_sequential_fill_no_pattern_falls_back(self):
+        """Non-sequential column should fall back to Unknown."""
+        df = pd.DataFrame({"x": ["apple", "banana", None, "cherry"]})
+        result = fill_null(df, "x", "sequential")
+        assert result.loc[2, "x"] == "Unknown"
+
     def test_unknown_method_raises(self):
         """Unknown fill method should raise InvalidActionError."""
         df = pd.DataFrame({"x": [1.0, np.nan]})
@@ -67,6 +93,61 @@ class TestFillNull:
         df = pd.DataFrame({"x": [1.0]})
         with pytest.raises(InvalidActionError):
             fill_null(df, "nonexistent", "mean")
+
+
+# --- Test fill_sequential ---
+
+
+class TestFillSequential:
+    """Tests for the fill_sequential function (gap-aware sequential ID filling)."""
+
+    def test_single_gap_filled(self):
+        """A single gap should be filled with the missing number."""
+        s = pd.Series(["P_1", "P_2", None, "P_4", "P_5"])
+        result = fill_sequential(s)
+        assert result.iloc[2] == "P_3"
+
+    def test_multiple_gaps(self):
+        """Multiple gaps should all be filled."""
+        s = pd.Series(["X_1", None, "X_3", None, "X_5"])
+        result = fill_sequential(s)
+        assert result.iloc[1] == "X_2"
+        assert result.iloc[3] == "X_4"
+
+    def test_gaps_before_extension(self):
+        """Gaps should be filled before extending past max."""
+        s = pd.Series(["R_1", None, None, None, "R_3"])
+        result = fill_sequential(s)
+        values = result.tolist()
+        assert "R_2" in values  # gap
+        assert "R_4" in values  # extension
+        assert "R_5" in values  # extension
+
+    def test_zero_padding_preserved(self):
+        """Zero-padded formats like 001, 002 should be preserved."""
+        s = pd.Series(["EMP_001", None, "EMP_003", "EMP_004"])
+        result = fill_sequential(s)
+        assert result.iloc[1] == "EMP_002"
+
+    def test_no_nulls_returns_unchanged(self):
+        """No nulls should return the series unchanged."""
+        s = pd.Series(["A_1", "A_2", "A_3"])
+        result = fill_sequential(s)
+        assert result.tolist() == ["A_1", "A_2", "A_3"]
+
+    def test_no_pattern_falls_back_to_unknown(self):
+        """Non-sequential data should fall back to 'Unknown'."""
+        s = pd.Series(["hello", "world", None])
+        result = fill_sequential(s)
+        assert result.iloc[2] == "Unknown"
+
+    def test_single_non_null_falls_back(self):
+        """Only one non-null value is not enough to detect a pattern."""
+        s = pd.Series(["A_1", None, None])
+        result = fill_sequential(s)
+        # Only 1 non-null — can't confirm pattern, but prefix matches >50%
+        # so it should still work
+        assert not result.isna().any()
 
 
 # --- Test drop_duplicates ---

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from cleanflow_env.models.action import ActionModel
@@ -33,8 +34,30 @@ class RuleBasedAgent:
     def _record(self, action_type: str, column: Optional[str]) -> None:
         self.action_history.append({"action_type": action_type, "column": column})
 
+    @staticmethod
+    def _looks_sequential(col: str, obs: ObservationModel) -> bool:
+        """Check if the column values in the preview follow a prefix+number pattern."""
+        pattern = re.compile(r"^(.*?)(\d+)$")
+        values = []
+        for row in obs.table_preview:
+            val = row.values.get(col)
+            if val is not None and str(val) != "None":
+                values.append(str(val))
+        if len(values) < 2:
+            return False
+        prefixes: dict[str, int] = {}
+        for val in values:
+            m = pattern.match(val)
+            if m:
+                prefixes[m.group(1)] = prefixes.get(m.group(1), 0) + 1
+        if not prefixes:
+            return False
+        best_count = max(prefixes.values())
+        return best_count >= len(values) * 0.5
+
     def _pick_fill_method(
-        self, col: str, descriptions: Dict[str, str], schema: Dict[str, str]
+        self, col: str, descriptions: Dict[str, str], schema: Dict[str, str],
+        obs: ObservationModel | None = None,
     ) -> tuple[str, Any]:
         """Use column descriptions to pick the best fill method.
 
@@ -43,14 +66,21 @@ class RuleBasedAgent:
         desc = descriptions.get(col, "").lower()
         dtype = schema.get(col, "string")
 
-        # Constant "Unknown" for identifiers and categorical strings
-        if any(kw in desc for kw in ["constant", "'unknown'", '"unknown"']):
-            return "constant", "Unknown"
+        # Sequential fill for identifiers that follow a prefix+number pattern
+        if any(kw in desc for kw in ["sequential", "sequence"]):
+            return "sequential", None
         if dtype == "string" and any(
             kw in desc for kw in ["identifier", "name", "id"]
         ):
             if "no cleaning" not in desc and "no action" not in desc:
+                # Check the table preview for sequential patterns
+                if self._looks_sequential(col, obs):
+                    return "sequential", None
                 return "constant", "Unknown"
+
+        # Constant "Unknown" for categorical strings
+        if any(kw in desc for kw in ["constant", "'unknown'", '"unknown"']):
+            return "constant", "Unknown"
 
         # Forward-fill for date/time columns
         if any(kw in desc for kw in ["forward fill", "forward-fill", "ffill"]):
@@ -85,7 +115,7 @@ class RuleBasedAgent:
         for col, count in obs.null_counts.items():
             if count > 0 and not self._is_done("fill_null", col):
                 method, constant_value = self._pick_fill_method(
-                    col, obs.column_descriptions, obs.table_schema
+                    col, obs.column_descriptions, obs.table_schema, obs
                 )
                 action = ActionModel(
                     action_type="fill_null",
@@ -112,7 +142,7 @@ class RuleBasedAgent:
             desc = obs.column_descriptions.get(col, "").lower()
             if dtype == "string":
                 # Currency: remove $ and , before numeric conversion
-                if any(kw in desc for kw in ["'$'", '"$"', "currency", "usd"]) and "'$'" in desc or '"$"' in desc or ("$" in desc and "string" in desc):
+                if any(kw in desc for kw in ["'$'", '"$"', "currency", "usd"]) and ("'$'" in desc or '"$"' in desc or ("$" in desc and "string" in desc)):
                     if not self._is_done("replace_substring_dollar", col):
                         action = ActionModel(
                             action_type="replace_substring",

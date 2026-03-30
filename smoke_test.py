@@ -95,7 +95,25 @@ def check_2_task_generation():
             assert col in col_desc, f"{name}: missing description for column '{col}'"
 
 
-def check_3_reward_integrity():
+def check_3_sequential_fill():
+    """Sequential fill: gaps filled before extending, no 'Unknown' in sequential ID columns."""
+    import re
+    from cleanflow_env.env.actions import fill_sequential
+    import pandas as pd
+
+    # Gap filling
+    s = pd.Series(["E_01", "E_02", None, "E_04"])
+    result = fill_sequential(s)
+    assert result.iloc[2] == "E_03", f"Expected 'E_03', got '{result.iloc[2]}'"
+
+    # Ground truth has no Unknown in name column
+    from cleanflow_env.tasks.task_easy import generate_easy_task
+    _, gt, _, _ = generate_easy_task()
+    assert (gt["name"] != "Unknown").all(), "GT name column should not have 'Unknown'"
+    assert all(re.match(r"^Employee_\d{3}$", v) for v in gt["name"]), "All GT names should match pattern"
+
+
+def check_4_reward_integrity():
     """Reward system: no oscillation, penalties work."""
     from cleanflow_env.env.environment import CleanFlowEnv
     from cleanflow_env.env.grader import final_score
@@ -113,7 +131,7 @@ def check_3_reward_integrity():
     assert r2.quality_delta == 0.0, f"Expected 0 quality_delta, got {r2.quality_delta}"
 
 
-def check_4_api_stack():
+def check_5_api_stack():
     """Test API endpoints (requires server on localhost:7860)."""
     import httpx
 
@@ -144,7 +162,7 @@ def check_4_api_stack():
     assert len(r.json()["results"]) == 4
 
 
-def check_5_determinism():
+def check_6_determinism():
     """Same episode twice produces identical scores and histories."""
     from cleanflow_env.baseline.rule_agent import RuleBasedAgent
     from cleanflow_env.env.environment import CleanFlowEnv
@@ -181,9 +199,10 @@ def main():
 
     run_check("Check 1 — Python stack", check_1_python_stack)
     run_check("Check 2 — Task generation", check_2_task_generation)
-    run_check("Check 3 — Reward integrity", check_3_reward_integrity)
-    run_check("Check 4 — API stack", check_4_api_stack, skip_on_connect=True)
-    run_check("Check 5 — Determinism", check_5_determinism)
+    run_check("Check 3 — Sequential fill", check_3_sequential_fill)
+    run_check("Check 4 — Reward integrity", check_4_reward_integrity)
+    run_check("Check 5 — API stack", check_5_api_stack, skip_on_connect=True)
+    run_check("Check 6 — Determinism", check_6_determinism)
 
     print(f"\n{'='*45}")
     failures = [r for r in results if r[1] == "FAIL"]

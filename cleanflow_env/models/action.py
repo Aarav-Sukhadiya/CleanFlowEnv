@@ -28,7 +28,7 @@ class ActionModel(BaseModel):
 
     column: Optional[str] = None
 
-    method: Optional[Literal["mean", "median", "mode", "constant", "forward_fill", "backward_fill"]] = None
+    method: Optional[Literal["mean", "median", "mode", "constant", "forward_fill", "backward_fill", "sequential"]] = None
 
     target_type: Optional[Literal["int", "float", "datetime", "string"]] = None
 

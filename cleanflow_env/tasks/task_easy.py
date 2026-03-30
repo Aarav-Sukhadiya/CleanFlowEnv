@@ -42,7 +42,7 @@ def generate_easy_task() -> Tuple[pd.DataFrame, pd.DataFrame, int, Dict[str, str
     salary_null_idx = np.random.choice(n_rows, size=8, replace=False)
     raw.loc[salary_null_idx, "salary"] = np.nan
 
-    # Inject 10 nulls in name (identifier — should fill with "Unknown")
+    # Inject 10 nulls in name (sequential identifier — should fill with sequential pattern)
     name_null_idx = np.random.choice(n_rows, size=10, replace=False)
     raw.loc[name_null_idx, "name"] = None
 
@@ -67,8 +67,10 @@ def generate_easy_task() -> Tuple[pd.DataFrame, pd.DataFrame, int, Dict[str, str
     gt["age"] = gt["age"].round(1)
     gt["salary"] = gt["salary"].fillna(gt["salary"].median())
     gt["salary"] = gt["salary"].round(2)
-    # Identifiers/categorical: fill with "Unknown"
-    gt["name"] = gt["name"].fillna("Unknown")
+    # Sequential identifiers: fill with next values in the pattern
+    from cleanflow_env.env.actions import fill_sequential
+    gt["name"] = fill_sequential(gt["name"])
+    # Categorical: fill with "Unknown"
     gt["department"] = gt["department"].fillna("Unknown")
     # Dates: forward-fill, bfill for leading NaN, then convert to datetime
     gt["start_date"] = gt["start_date"].ffill().bfill()
@@ -77,7 +79,7 @@ def generate_easy_task() -> Tuple[pd.DataFrame, pd.DataFrame, int, Dict[str, str
     gt = gt.drop_duplicates().reset_index(drop=True)
 
     column_descriptions = {
-        "name": "Employee full name. String identifier. 10 missing values — fill with constant 'Unknown'.",
+        "name": "Employee identifier. String, sequential pattern (Employee_000, Employee_001, ...). 10 missing values — fill with sequential method.",
         "age": "Employee age in years. Numeric, expected range 18-90. Missing values should use median.",
         "salary": "Annual salary in USD. Numeric, expected range 30000-120000. Missing values should use median.",
         "department": "Department name. Categorical string. 7 missing values — fill with constant 'Unknown'.",

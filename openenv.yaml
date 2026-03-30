@@ -37,51 +37,54 @@ tasks:
     difficulty: easy
     description: "Fill missing values and remove duplicates in employee survey data (200 rows, 5 columns)."
     budget: 20
-    expected_baseline_score: 0.90
+    expected_baseline_score: 0.94
   - id: task_medium
     name: Schema Normalization
     difficulty: medium
     description: "Convert mixed-format dates, currency strings, and boolean variants in transaction data (300 rows, 6 columns)."
     budget: 20
-    expected_baseline_score: 0.70
+    expected_baseline_score: 0.92
   - id: task_hard
     name: Advanced Cleaning
     difficulty: hard
     description: "Remove outliers, normalize IDs, and fix date typos in medical trial records (400 rows, 8 columns)."
     budget: 20
-    expected_baseline_score: 0.45
+    expected_baseline_score: 0.88
   - id: task_expert
     name: Budget-Constrained Cleaning
     difficulty: expert
     description: "All issue types combined with distractor columns under a tight 15-credit budget (500 rows, 10 columns)."
     budget: 15
-    expected_baseline_score: 0.30
+    expected_baseline_score: 0.88
 
 score_range: [0.0, 1.0]
 deterministic: true
 random_seed: 42
 
 scoring:
-  formula: "0.4 * correctness + 0.3 * completeness + 0.2 * efficiency + 0.1 * action_quality"
+  formula: "0.40 * quality_overall + 0.20 * validation + 0.15 * efficiency + 0.10 * action_quality + 0.15 * schema_accuracy"
   components:
-    correctness:
-      weight: 0.4
-      description: "Fraction of cells matching ground truth"
-    completeness:
-      weight: 0.3
-      description: "1.0 if no nulls and no duplicates, scaled otherwise"
+    quality_overall:
+      weight: 0.40
+      description: "Weighted quality metric: 0.6 * correctness + 0.3 * completeness + 0.1 * schema_accuracy"
+    validation:
+      weight: 0.20
+      description: "Fraction of data validation rules passed (nulls, duplicates, types, ranges, row count)"
     efficiency:
-      weight: 0.2
+      weight: 0.15
       description: "1 - (budget_used / total_budget)"
     action_quality:
-      weight: 0.1
+      weight: 0.10
       description: "1 - (redundant_actions / total_actions)"
+    schema_accuracy:
+      weight: 0.15
+      description: "Fraction of columns with correct dtype matching ground truth"
 
 action_types:
   fill_null:
     required_fields: [column, method]
     cost: 1
-    methods: [mean, median, mode, constant, forward_fill, backward_fill]
+    methods: [mean, median, mode, constant, forward_fill, backward_fill, sequential]
   drop_duplicates:
     required_fields: []
     cost: 1

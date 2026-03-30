@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 import pandas as pd
 
 from cleanflow_env.models.action import ActionModel
@@ -9,6 +11,89 @@ class InvalidActionError(Exception):
     """Raised when an action cannot be applied to the current table."""
 
     pass
+
+
+def detect_sequential_pattern(series: pd.Series) -> tuple[str, str, set[int]] | None:
+    """Detect a prefix+number pattern in a string column.
+
+    Returns (prefix, zero_pad_format, existing_numbers) or None if no pattern found.
+    Example: "Employee_007" → ("Employee_", "03d", {0, 1, 2, ..., 199})
+    """
+    non_null = series.dropna().astype(str)
+    if len(non_null) < 2:
+        return None
+
+    # Match strings like "Prefix_001", "EMP0042", "P003", etc.
+    pattern = re.compile(r"^(.*?)(\d+)$")
+    prefixes: dict[str, list[int]] = {}
+    pad_widths: dict[str, set[int]] = {}
+
+    for val in non_null:
+        m = pattern.match(val)
+        if m:
+            prefix, num_str = m.group(1), m.group(2)
+            prefixes.setdefault(prefix, []).append(int(num_str))
+            pad_widths.setdefault(prefix, set()).add(len(num_str))
+
+    if not prefixes:
+        return None
+
+    # Pick the most common prefix (must cover >50% of non-null values)
+    best_prefix = max(prefixes, key=lambda p: len(prefixes[p]))
+    if len(prefixes[best_prefix]) < len(non_null) * 0.5:
+        return None
+
+    nums = prefixes[best_prefix]
+    widths = pad_widths[best_prefix]
+    # Use zero-padding if all number parts have the same width
+    if len(widths) == 1:
+        fmt = f"0{widths.pop()}d"
+    else:
+        fmt = "d"
+
+    return best_prefix, fmt, set(nums)
+
+
+def fill_sequential(col: pd.Series) -> pd.Series:
+    """Fill nulls in a sequential ID column by filling gaps first, then extending.
+
+    Detects prefix+number patterns (e.g. Employee_001, PROD_0042) and
+    fills each null with the missing gap value in the sequence first.
+    If there are more nulls than gaps, continues past the max.
+    Falls back to 'Unknown' if no sequential pattern is detected.
+
+    Example: [Emp_1, Emp_2, null, Emp_4, Emp_5] → fills null with Emp_3 (gap),
+    not Emp_6 (next after max).
+    """
+    result = col.copy()
+    null_mask = result.isna()
+    if not null_mask.any():
+        return result
+
+    pattern_info = detect_sequential_pattern(col)
+    if pattern_info is None:
+        return result.fillna("Unknown")
+
+    prefix, fmt, existing_nums = pattern_info
+
+    # Build the pool of fill values: gaps first, then extend past max
+    max_num = max(existing_nums)
+    full_range = set(range(min(existing_nums), max_num + 1))
+    gaps = sorted(full_range - existing_nums)
+
+    # After gaps are exhausted, continue from max+1, max+2, ...
+    next_after_max = max_num + 1
+    null_indices = result.index[null_mask]
+
+    for idx in null_indices:
+        if gaps:
+            num = gaps.pop(0)
+        else:
+            num = next_after_max
+            next_after_max += 1
+        result.at[idx] = f"{prefix}{num:{fmt}}"
+
+    return result
 
 
 def fill_null(
@@ -33,6 +118,8 @@ def fill_null(
         result[column] = col.fillna(mode_vals.iloc[0])
     elif method == "constant":
         result[column] = col.fillna(constant_value)
+    elif method == "sequential":
+        result[column] = fill_sequential(col)
     elif method == "forward_fill":
         result[column] = col.ffill().bfill()  # bfill fallback for leading NaNs
     elif method == "backward_fill":

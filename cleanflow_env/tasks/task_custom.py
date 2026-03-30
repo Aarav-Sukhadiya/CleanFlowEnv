@@ -44,6 +44,24 @@ def _is_identifier_column(col_name: str, series: pd.Series) -> bool:
     return False
 
 
+def _is_sequential_column(series: pd.Series) -> bool:
+    """Heuristic: check if a string column follows a prefix+number pattern."""
+    import re
+    non_null = series.dropna().astype(str)
+    if len(non_null) < 3:
+        return False
+    pattern = re.compile(r"^(.*?)(\d+)$")
+    prefixes: dict[str, int] = {}
+    for val in non_null.head(30):
+        m = pattern.match(val)
+        if m:
+            prefixes[m.group(1)] = prefixes.get(m.group(1), 0) + 1
+    if not prefixes:
+        return False
+    best_count = max(prefixes.values())
+    return best_count >= len(non_null.head(30)) * 0.5
+
+
 def analyze_dataset(df: pd.DataFrame) -> Dict[str, Any]:
     """
     Analyze a DataFrame and report all detected data quality issues.
@@ -160,6 +178,9 @@ def auto_generate_ground_truth(
             gt[col] = gt[col].fillna(gt[col].median())
         elif col in date_cols:
             gt[col] = gt[col].ffill().bfill()
+        elif _is_identifier_column(col, gt[col]) and _is_sequential_column(gt[col]):
+            from cleanflow_env.env.actions import fill_sequential
+            gt[col] = fill_sequential(gt[col])
         elif _is_identifier_column(col, gt[col]):
             gt[col] = gt[col].fillna("Unknown")
         else:
@@ -345,6 +366,8 @@ def auto_generate_descriptions(
             if null_count > 0:
                 if col_is_date:
                     parts.append(f"{null_count} missing values — use forward fill")
+                elif _is_identifier_column(col, df[col]) and _is_sequential_column(df[col]):
+                    parts.append(f"{null_count} missing values — fill with sequential method")
                 elif _is_identifier_column(col, df[col]):
                     parts.append(f"{null_count} missing values — fill with constant 'Unknown'")
                 else:
