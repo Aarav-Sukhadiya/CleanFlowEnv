@@ -60,7 +60,7 @@ app.add_middleware(
 
 
 class ResetRequest(BaseModel):
-    task_id: str
+    task_id: str = "task_easy"
 
 
 class StepRequest(BaseModel):
