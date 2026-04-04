@@ -1,7 +1,7 @@
 """
 Inference script for CleanFlowEnv — OpenEnv Hackathon submission.
 
-Uses the HuggingFace Inference API to run an LLM-based data cleaning agent
+Uses the OpenAI-compatible client to run an LLM-based data cleaning agent
 against all tasks in the environment.
 
 Required environment variables:
@@ -13,9 +13,12 @@ from __future__ import annotations
 
 import json
 import os
+import sys
+import time
 from typing import Any, Dict, List, Optional
 
 import requests
+from openai import OpenAI
 
 # ---------------------------------------------------------------------------
 # Configuration from environment
@@ -26,6 +29,14 @@ HF_TOKEN = os.environ.get("HF_TOKEN", "")
 ENV_BASE_URL = os.environ.get("ENV_BASE_URL", "http://localhost:7860")
 
 # ---------------------------------------------------------------------------
+# OpenAI-compatible client
+# ---------------------------------------------------------------------------
+client = OpenAI(
+    base_url=API_BASE_URL,
+    api_key=HF_TOKEN,
+)
+
+# ---------------------------------------------------------------------------
 # Action schema (passed to the LLM so it knows what it can do)
 # ---------------------------------------------------------------------------
 ACTION_SCHEMA = """You are a data cleaning agent for CleanFlowEnv. You must return ONE JSON action per turn.
@@ -34,8 +45,9 @@ Available action types and their required fields:
 
 1. fill_null — Fill missing values in a column (cost: 1)
    Required: action_type, column, method
-   method options: "mean", "median", "mode", "constant", "forward_fill", "backward_fill"
+   method options: "mean", "median", "mode", "constant", "forward_fill", "backward_fill", "sequential"
    If method is "constant", also provide "constant_value".
+   Use "sequential" for ID columns with a prefix+number pattern (e.g. Employee_001).
 
 2. drop_duplicates — Remove duplicate rows (cost: 1)
    Required: action_type (no column needed)
@@ -74,7 +86,6 @@ Example actions:
 
 def build_prompt(obs: Dict[str, Any], action_history: List[Dict]) -> str:
     """Build the LLM prompt from the current observation."""
-    # Summarize key info compactly to fit in context
     null_info = {k: v for k, v in obs.get("null_counts", {}).items() if v > 0}
     schema = obs.get("schema", {})
     budget = obs.get("budget_remaining", "unknown")
@@ -82,7 +93,6 @@ def build_prompt(obs: Dict[str, Any], action_history: List[Dict]) -> str:
     dupes = obs.get("duplicate_count", 0)
     col_desc = obs.get("column_descriptions", {})
 
-    # Format table preview
     preview_rows = obs.get("table_preview", [])
     preview_str = ""
     if preview_rows:
@@ -114,9 +124,12 @@ Table preview (first 3 rows):
 Strategy:
 1. First drop duplicates if any exist (cost 1)
 2. Fill nulls in columns that have missing values (cost 1 each)
-3. Convert types where column descriptions suggest type mismatch (cost 2 each)
-4. Remove outliers in numeric columns if budget allows (cost 3 each)
-5. Stop when budget is low or all issues are fixed
+3. Strip whitespace on string columns that mention it (cost 1 each)
+4. Replace substrings like "$" or "," before type conversion (cost 1 each)
+5. Map categorical values where column descriptions mention boolean mapping (cost 2 each)
+6. Convert types where column descriptions suggest type mismatch (cost 2 each)
+7. Remove outliers in numeric columns if budget allows (cost 3 each)
+8. Stop when budget is low or all issues are fixed
 
 Based on the observation above, decide the single best next action. If all issues are resolved or budget is too low for useful actions, return {{"action_type": "drop_duplicates"}} as a low-cost finishing move.
 
@@ -138,7 +151,6 @@ def parse_action(response_text: str) -> Optional[Dict[str, Any]]:
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        # Try to find JSON in the response
         start = text.find("{")
         end = text.rfind("}") + 1
         if start >= 0 and end > start:
@@ -149,6 +161,46 @@ def parse_action(response_text: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def log_start(task_id: str, obs: Dict[str, Any]) -> None:
+    """Emit [START] structured log."""
+    entry = {
+        "task_id": task_id,
+        "model": MODEL_NAME,
+        "api_base_url": API_BASE_URL,
+        "null_counts": obs.get("null_counts", {}),
+        "duplicate_count": obs.get("duplicate_count", 0),
+        "budget_remaining": obs.get("budget_remaining", 0),
+        "columns": list(obs.get("schema", {}).keys()),
+    }
+    print(f"[START] {json.dumps(entry)}", flush=True)
+
+
+def log_step(task_id: str, step_num: int, action: Dict, reward_data: Dict, obs: Dict) -> None:
+    """Emit [STEP] structured log."""
+    entry = {
+        "task_id": task_id,
+        "step": step_num,
+        "action": action,
+        "reward": reward_data.get("reward", 0.0),
+        "quality_delta": reward_data.get("quality_delta", 0.0),
+        "cumulative_quality": reward_data.get("cumulative_quality", 0.0),
+        "done": reward_data.get("done", False),
+        "budget_remaining": obs.get("budget_remaining", 0),
+    }
+    print(f"[STEP] {json.dumps(entry)}", flush=True)
+
+
+def log_end(task_id: str, score: Optional[float], steps: int, breakdown: Optional[Dict]) -> None:
+    """Emit [END] structured log."""
+    entry = {
+        "task_id": task_id,
+        "score": score,
+        "steps": steps,
+        "breakdown": breakdown,
+    }
+    print(f"[END] {json.dumps(entry)}", flush=True)
+
+
 def run_episode(task_id: str) -> Dict[str, Any]:
     """Run a full episode for one task using the LLM agent."""
     # Reset environment
@@ -156,56 +208,54 @@ def run_episode(task_id: str) -> Dict[str, Any]:
     resp.raise_for_status()
     obs = resp.json()
 
+    log_start(task_id, obs)
+
     done = False
     steps = 0
     action_history: List[Dict] = []
-    max_steps = 30  # safety limit
+    max_steps = 30
 
     while not done and steps < max_steps:
         prompt = build_prompt(obs, action_history)
 
         try:
-            llm_resp = requests.post(
-                f"{API_BASE_URL}/chat/completions",
-                headers={"Authorization": f"Bearer {HF_TOKEN}",
-                         "Content-Type": "application/json"},
-                json={
-                    "model": MODEL_NAME,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 256,
-                    "temperature": 0.1,
-                },
-                timeout=30,
+            completion = client.chat.completions.create(
+                model=MODEL_NAME,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=256,
+                temperature=0.1,
             )
-            llm_resp.raise_for_status()
-            response_text = llm_resp.json()["choices"][0]["message"]["content"] or ""
+            response_text = completion.choices[0].message.content or ""
         except Exception as e:
-            print(f"  [{task_id}] LLM error at step {steps}: {e}")
+            print(f"  [{task_id}] LLM error at step {steps}: {e}", file=sys.stderr)
             break
 
         action = parse_action(response_text)
         if action is None:
-            print(f"  [{task_id}] Failed to parse action from LLM response, stopping.")
+            print(f"  [{task_id}] Failed to parse action from LLM response, stopping.", file=sys.stderr)
             break
 
-        # Validate action_type
-        valid_types = {"fill_null", "drop_duplicates", "convert_type", "normalize", "remove_outliers", "strip_whitespace", "map_values", "replace_substring"}
+        valid_types = {
+            "fill_null", "drop_duplicates", "convert_type", "normalize",
+            "remove_outliers", "strip_whitespace", "map_values", "replace_substring",
+        }
         if action.get("action_type") not in valid_types:
-            print(f"  [{task_id}] Invalid action type: {action.get('action_type')}, stopping.")
+            print(f"  [{task_id}] Invalid action type: {action.get('action_type')}, stopping.", file=sys.stderr)
             break
 
         try:
-            result = requests.post(
-                f"{ENV_BASE_URL}/step", json={"action": action}
-            )
+            result = requests.post(f"{ENV_BASE_URL}/step", json={"action": action})
             result.raise_for_status()
             step_data = result.json()
             obs = step_data["observation"]
-            done = step_data["reward"]["done"]
+            reward_data = step_data["reward"]
+            done = step_data["done"]
             action_history.append(action)
             steps += 1
+
+            log_step(task_id, steps, action, reward_data, obs)
         except Exception as e:
-            print(f"  [{task_id}] Step error at step {steps}: {e}")
+            print(f"  [{task_id}] Step error at step {steps}: {e}", file=sys.stderr)
             break
 
     # Get final score
@@ -213,6 +263,9 @@ def run_episode(task_id: str) -> Dict[str, Any]:
         score_resp = requests.get(f"{ENV_BASE_URL}/grader")
         score_resp.raise_for_status()
         grader = score_resp.json()
+
+        log_end(task_id, grader["score"], steps, grader)
+
         return {
             "task_id": task_id,
             "score": grader["score"],
@@ -220,6 +273,7 @@ def run_episode(task_id: str) -> Dict[str, Any]:
             "breakdown": grader,
         }
     except Exception as e:
+        log_end(task_id, None, steps, None)
         return {"task_id": task_id, "score": None, "steps": steps, "error": str(e)}
 
 
@@ -233,29 +287,17 @@ def main():
     except Exception:
         task_list = ["task_easy", "task_medium", "task_hard", "task_expert"]
 
-    print(f"Running LLM inference on {len(task_list)} tasks...")
-    print(f"Model: {MODEL_NAME}")
-    print(f"API: {API_BASE_URL}")
-    print()
-
     results = {}
     scores = []
 
     for task_id in task_list:
-        print(f"  Running {task_id}...")
         result = run_episode(task_id)
         results[task_id] = result
         if result.get("score") is not None:
             scores.append(result["score"])
-            print(f"    Score: {result['score']:.3f} ({result['steps']} steps)")
-        else:
-            print(f"    ERROR: {result.get('error')}")
 
     avg = sum(scores) / len(scores) if scores else 0.0
-
-    print(f"\n{'='*40}")
-    print(f"Average score: {avg:.3f}")
-    print(f"{'='*40}")
+    print(json.dumps({"average_score": round(avg, 6), "results": results}), flush=True)
 
     return {"results": results, "average_score": round(avg, 6)}
 
