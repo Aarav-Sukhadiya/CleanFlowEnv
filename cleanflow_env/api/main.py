@@ -16,7 +16,6 @@ from typing import Any, Dict, List, Optional
 
 import gradio as gr
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -102,8 +101,15 @@ class BaselineRequest(BaseModel):
 
 @app.get("/")
 def root():
-    """Redirect to the interactive dashboard."""
-    return RedirectResponse(url="/dashboard")
+    """Health check — also serves an HTML redirect for browsers."""
+    from fastapi.responses import HTMLResponse
+    accept = ""
+    # Return JSON for programmatic access, HTML redirect for browsers
+    return HTMLResponse(
+        content='<html><head><meta http-equiv="refresh" content="0;url=/dashboard"></head>'
+        '<body><p>Redirecting to <a href="/dashboard">dashboard</a>...</p></body></html>',
+        status_code=200,
+    )
 
 
 @app.post("/reset")
