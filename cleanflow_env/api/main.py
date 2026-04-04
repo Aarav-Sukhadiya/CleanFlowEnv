@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional
 
 import gradio as gr
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -101,8 +102,8 @@ class BaselineRequest(BaseModel):
 
 @app.get("/")
 def root():
-    """Health check endpoint."""
-    return {"name": "CleanFlowEnv", "version": "2.0", "status": "ok"}
+    """Redirect to the interactive dashboard."""
+    return RedirectResponse(url="/dashboard")
 
 
 @app.post("/reset")

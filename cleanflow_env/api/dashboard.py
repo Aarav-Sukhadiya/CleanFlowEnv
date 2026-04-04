@@ -893,12 +893,13 @@ def create_dashboard() -> gr.Blocks:
                     | **Budget Mechanic** | Each action costs credits (1-3), mirroring real ETL billing constraints |
                     | **Semantic Hints** | Column descriptions force genuine NLP reasoning, not just pattern matching |
                     | **Deterministic Grading** | Fixed IQR x 1.5 rule, seeded data generation, fully reproducible |
+                    | **Gap-Aware Sequential Fill** | Detects ID patterns (e.g. Employee_001) and fills gaps before extending past max |
 
                     ### Action Types
 
                     | Action | Cost | Description |
                     |--------|------|-------------|
-                    | `fill_null` | 1 | Fill missing values (mean/median/mode/constant/ffill/bfill) |
+                    | `fill_null` | 1 | Fill missing values (mean/median/mode/constant/ffill/bfill/**sequential**) |
                     | `drop_duplicates` | 1 | Remove all fully duplicate rows |
                     | `strip_whitespace` | 1 | Strip leading/trailing whitespace from string column |
                     | `replace_substring` | 1 | Replace a substring in string values (e.g. remove "$") |
@@ -909,8 +910,13 @@ def create_dashboard() -> gr.Blocks:
 
                     ### Scoring Formula
                     ```
-                    score = 0.4 * correctness + 0.3 * completeness + 0.2 * efficiency + 0.1 * action_quality
+                    score = 0.40 * quality_overall
+                          + 0.20 * validation
+                          + 0.15 * efficiency
+                          + 0.10 * action_quality
+                          + 0.15 * schema_accuracy
                     ```
+                    `quality_overall = 0.6 * correctness + 0.3 * completeness + 0.1 * schema_accuracy`
 
                     ### API Endpoints
                     This Space also exposes a full OpenEnv-compliant API:
