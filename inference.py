@@ -206,7 +206,9 @@ def run_episode(task_id: str) -> Dict[str, Any]:
     # Reset environment
     resp = requests.post(f"{ENV_BASE_URL}/reset", json={"task_id": task_id})
     resp.raise_for_status()
-    obs = resp.json()
+    reset_data = resp.json()
+    # Handle both wrapped and flat observation formats
+    obs = reset_data.get("observation", reset_data)
 
     log_start(task_id, obs)
 

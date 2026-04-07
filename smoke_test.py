@@ -149,7 +149,7 @@ def check_5_api_stack():
     r = client.post("/step", json={"action": {"action_type": "drop_duplicates"}})
     assert r.status_code == 200, f"/step returned {r.status_code}"
     data = r.json()
-    assert -2.0 <= data["reward"]["reward"] <= 2.0
+    assert 0 < data["reward"] < 1
 
     # Grader
     r = client.get("/grader")

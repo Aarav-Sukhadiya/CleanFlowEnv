@@ -148,7 +148,12 @@ def reset(req: Optional[ResetRequest] = None):
     try:
         task_id = req.task_id if req else "task_easy"
         obs = env.reset(task_id)
-        return obs.model_dump()
+        # Return standard openenv ResetResponse format
+        return {
+            "observation": obs.model_dump(),
+            "reward": None,
+            "done": False,
+        }
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
