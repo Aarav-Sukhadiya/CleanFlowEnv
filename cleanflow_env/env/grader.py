@@ -81,15 +81,19 @@ def final_score(state: EnvironmentState) -> Dict[str, float]:
     )
     score = _clamp(score)
 
+    # Clamp AFTER rounding to guarantee no boundary values survive
+    def _safe(v: float) -> float:
+        return _clamp(round(v, 6))
+
     return {
-        "score": round(score, 6),
-        "correctness": round(correctness, 6),
-        "completeness": round(completeness, 6),
-        "schema_accuracy": round(schema_accuracy, 6),
-        "quality_overall": round(quality_overall, 6),
-        "efficiency": round(efficiency, 6),
-        "action_quality": round(action_quality, 6),
-        "validation": round(validation, 6),
+        "score": _safe(score),
+        "correctness": _safe(correctness),
+        "completeness": _safe(completeness),
+        "schema_accuracy": _safe(schema_accuracy),
+        "quality_overall": _safe(quality_overall),
+        "efficiency": _safe(efficiency),
+        "action_quality": _safe(action_quality),
+        "validation": _safe(validation),
         "validation_details": validation_result,
     }
 
