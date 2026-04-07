@@ -25,6 +25,7 @@ from cleanflow_env.baseline.run_baseline import run_baseline_all
 from cleanflow_env.env.environment import CleanFlowEnv
 from cleanflow_env.env.grader import final_score
 from cleanflow_env.models.action import ActionModel
+from cleanflow_env.models.observation import ObservationModel
 from cleanflow_env.tasks.task_easy import generate_easy_task
 from cleanflow_env.tasks.task_expert import generate_expert_task
 from cleanflow_env.tasks.task_hard import generate_hard_task
@@ -67,12 +68,6 @@ class StepRequest(BaseModel):
     action: Dict[str, Any]
 
 
-class StepResponse(BaseModel):
-    observation: Dict[str, Any]
-    reward: Dict[str, Any]
-    done: bool
-
-
 class GraderResponse(BaseModel):
     score: float
     correctness: float
@@ -99,15 +94,47 @@ class BaselineRequest(BaseModel):
     tasks: Optional[List[str]] = None
 
 
-# --- Endpoints ---
+# --- OpenEnv Standard Endpoints ---
+
+
+@app.get("/health")
+def health():
+    """OpenEnv standard health endpoint."""
+    return {"status": "healthy"}
+
+
+@app.get("/metadata")
+def metadata():
+    """OpenEnv standard metadata endpoint."""
+    return {
+        "name": "CleanFlowEnv",
+        "description": "OpenEnv-compliant environment for data cleaning and ETL workflows.",
+    }
+
+
+@app.get("/schema")
+def schema():
+    """OpenEnv standard schema endpoint."""
+    return {
+        "action": ActionModel.model_json_schema(),
+        "observation": ObservationModel.model_json_schema(),
+        "state": {"type": "object", "description": "Internal environment state"},
+    }
+
+
+@app.post("/mcp")
+def mcp():
+    """OpenEnv standard MCP endpoint (minimal stub)."""
+    return {"jsonrpc": "2.0", "result": {"tools": []}, "id": None}
+
+
+# --- Core Endpoints ---
 
 
 @app.get("/")
 def root():
     """Health check — also serves an HTML redirect for browsers."""
     from fastapi.responses import HTMLResponse
-    accept = ""
-    # Return JSON for programmatic access, HTML redirect for browsers
     return HTMLResponse(
         content='<html><head><meta http-equiv="refresh" content="0;url=/dashboard"></head>'
         '<body><p>Redirecting to <a href="/dashboard">dashboard</a>...</p></body></html>',
@@ -128,14 +155,26 @@ def reset(req: Optional[ResetRequest] = None):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+_EPS = 1e-4
+
+
+def _clamp_score(v: float) -> float:
+    """Clamp to strict (0, 1)."""
+    return max(_EPS, min(1.0 - _EPS, v))
+
+
 @app.post("/step")
 def step(req: StepRequest):
     """Apply an action and return observation + reward."""
     try:
         obs, reward = env.step(req.action)
+        # Return reward as a single float per openenv standard StepResponse
+        # Also include full breakdown in observation.metadata for our inference.py
+        obs_dict = obs.model_dump()
+        obs_dict["reward_details"] = reward.model_dump()
         return {
-            "observation": obs.model_dump(),
-            "reward": reward.model_dump(),
+            "observation": obs_dict,
+            "reward": _clamp_score(reward.cumulative_quality),
             "done": reward.done,
         }
     except RuntimeError as e:
@@ -198,5 +237,3 @@ def baseline(_req: BaselineRequest = BaselineRequest()):
 # Mounted at /dashboard — the visual demo for judges
 dashboard = create_dashboard()
 app = gr.mount_gradio_app(app, dashboard, path="/dashboard")
-
-
