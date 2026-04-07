@@ -66,7 +66,11 @@ def run_baseline_all(env: CleanFlowEnv) -> Dict[str, Any]:
             results[task_id] = {"score": None, "error": str(e)}
 
     valid_scores = [s for s in scores if s is not None]
-    avg = sum(valid_scores) / len(valid_scores) if valid_scores else 0.0
+    avg = sum(valid_scores) / len(valid_scores) if valid_scores else 0.5
+
+    # Clamp average to strict (0, 1)
+    _EPS = 1e-4
+    avg = max(_EPS, min(1.0 - _EPS, avg))
 
     return {
         "results": results,

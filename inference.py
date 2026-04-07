@@ -250,8 +250,11 @@ def run_episode(task_id: str) -> Dict[str, Any]:
             result.raise_for_status()
             step_data = result.json()
             obs = step_data["observation"]
-            # reward is now a single float; details in observation.reward_details
-            reward_data = obs.get("reward_details", {})
+            # reward is a single float at top level
+            reward_data = {
+                "reward": step_data.get("reward", 0.0),
+                "done": step_data.get("done", False),
+            }
             done = step_data["done"]
             action_history.append(action)
             steps += 1

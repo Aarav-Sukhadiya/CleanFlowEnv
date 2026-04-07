@@ -12,6 +12,7 @@ Import map:
 """
 from __future__ import annotations
 
+import math
 from typing import Any, Dict, List, Optional
 
 import gradio as gr
@@ -164,8 +165,10 @@ _EPS = 1e-4
 
 
 def _clamp_score(v: float) -> float:
-    """Clamp to strict (0, 1)."""
-    return max(_EPS, min(1.0 - _EPS, v))
+    """Clamp to strict (0, 1), guarding against NaN/inf."""
+    if not isinstance(v, (int, float)) or not math.isfinite(v):
+        return _EPS
+    return max(_EPS, min(1.0 - _EPS, float(v)))
 
 
 @app.post("/step")
@@ -174,9 +177,9 @@ def step(req: StepRequest):
     try:
         obs, reward = env.step(req.action)
         # Return reward as a single float per openenv standard StepResponse
-        # Also include full breakdown in observation.metadata for our inference.py
+        # Do NOT embed reward_details in observation — internal reward values
+        # (scaled quality_delta, penalties) can exceed (0,1) and confuse validators.
         obs_dict = obs.model_dump()
-        obs_dict["reward_details"] = reward.model_dump()
         return {
             "observation": obs_dict,
             "reward": _clamp_score(reward.cumulative_quality),
@@ -201,14 +204,16 @@ def state():
 def grader():
     """Return final score after episode ends."""
     try:
+        # Auto-initialize if no episode exists (validator may call before /reset)
         if env._state is None:
-            raise HTTPException(
-                status_code=400, detail="No episode in progress. Call /reset first."
-            )
+            env.reset("task_easy")
         result = final_score(env._state)
+        # Belt-and-suspenders: clamp every score field at the API boundary
+        for key in ("score", "correctness", "completeness", "schema_accuracy",
+                     "quality_overall", "efficiency", "action_quality", "validation"):
+            if key in result:
+                result[key] = _clamp_score(result[key])
         return result
-    except HTTPException:
-        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

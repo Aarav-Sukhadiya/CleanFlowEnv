@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any, Dict, List
 
 from cleanflow_env.env.rewards import compute_quality
@@ -62,7 +63,9 @@ def final_score(state: EnvironmentState) -> Dict[str, float]:
     # Validator requires all scores strictly in (0, 1)
     _EPS = 1e-4
     def _clamp(v: float) -> float:
-        return max(_EPS, min(1.0 - _EPS, v))
+        if not isinstance(v, (int, float)) or not math.isfinite(v):
+            return _EPS
+        return max(_EPS, min(1.0 - _EPS, float(v)))
 
     quality_overall = _clamp(quality_overall)
     correctness = _clamp(correctness)

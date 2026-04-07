@@ -124,8 +124,11 @@ def compute_quality(current: pd.DataFrame, ground_truth: pd.DataFrame) -> Dict[s
     overall = 0.6 * correctness + 0.3 * completeness + 0.1 * schema_accuracy
 
     # Clamp all to strict (0, 1) — validator rejects exactly 0.0 or 1.0
+    import math
     def _clamp(v: float) -> float:
-        return max(_EPS, min(1.0 - _EPS, v))
+        if not isinstance(v, (int, float)) or not math.isfinite(v):
+            return _EPS
+        return max(_EPS, min(1.0 - _EPS, float(v)))
 
     return {
         "correctness": round(_clamp(correctness), 6),
