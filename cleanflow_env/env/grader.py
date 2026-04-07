@@ -59,12 +59,18 @@ def final_score(state: EnvironmentState) -> Dict[str, float]:
     )
     validation = validation_result["validation_score"]
 
-    # Clamp all to [0, 1]
-    quality_overall = max(0.0, min(1.0, quality_overall))
-    validation = max(0.0, min(1.0, validation))
-    efficiency = max(0.0, min(1.0, efficiency))
-    action_quality = max(0.0, min(1.0, action_quality))
-    schema_accuracy = max(0.0, min(1.0, schema_accuracy))
+    # Validator requires all scores strictly in (0, 1)
+    _EPS = 1e-4
+    def _clamp(v: float) -> float:
+        return max(_EPS, min(1.0 - _EPS, v))
+
+    quality_overall = _clamp(quality_overall)
+    correctness = _clamp(correctness)
+    completeness = _clamp(completeness)
+    validation = _clamp(validation)
+    efficiency = _clamp(efficiency)
+    action_quality = _clamp(action_quality)
+    schema_accuracy = _clamp(schema_accuracy)
 
     score = (
         0.40 * quality_overall
@@ -73,9 +79,7 @@ def final_score(state: EnvironmentState) -> Dict[str, float]:
         + 0.10 * action_quality
         + 0.15 * schema_accuracy
     )
-    # Validator requires score strictly in (0, 1) — never exactly 0.0 or 1.0
-    _EPS = 1e-4
-    score = max(_EPS, min(1.0 - _EPS, score))
+    score = _clamp(score)
 
     return {
         "score": round(score, 6),
