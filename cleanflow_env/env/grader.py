@@ -73,7 +73,9 @@ def final_score(state: EnvironmentState) -> Dict[str, float]:
         + 0.10 * action_quality
         + 0.15 * schema_accuracy
     )
-    score = max(0.0, min(1.0, score))
+    # Validator requires score strictly in (0, 1) — never exactly 0.0 or 1.0
+    _EPS = 1e-4
+    score = max(_EPS, min(1.0 - _EPS, score))
 
     return {
         "score": round(score, 6),
