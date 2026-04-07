@@ -114,7 +114,10 @@ def validate_cleaned_data(
             f"expected ~{len(ground_truth)} (ratio: {len_ratio:.2f})"
         )
 
-    validation_score = rules_passed / rules_total if rules_total > 0 else 1.0
+    raw = rules_passed / rules_total if rules_total > 0 else 1.0
+    # Clamp to strict (0, 1) — validator rejects exactly 0.0 or 1.0
+    _EPS = 1e-4
+    validation_score = max(_EPS, min(1.0 - _EPS, raw))
 
     return {
         "validation_score": round(validation_score, 6),

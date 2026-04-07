@@ -22,22 +22,23 @@ def compute_quality(current: pd.DataFrame, ground_truth: pd.DataFrame) -> Dict[s
     - schema_accuracy: fraction of columns with matching dtype.
     - overall: weighted combination used as the per-step quality signal.
     """
+    _EPS = 1e-4
     if current.empty or ground_truth.empty:
         return {
-            "correctness": 0.0,
-            "completeness": 0.0,
-            "schema_accuracy": 0.0,
-            "overall": 0.0,
+            "correctness": _EPS,
+            "completeness": _EPS,
+            "schema_accuracy": _EPS,
+            "overall": _EPS,
         }
 
     # Align on common columns
     common_cols = list(set(current.columns) & set(ground_truth.columns))
     if not common_cols:
         return {
-            "correctness": 0.0,
-            "completeness": 0.0,
-            "schema_accuracy": 0.0,
-            "overall": 0.0,
+            "correctness": _EPS,
+            "completeness": _EPS,
+            "schema_accuracy": _EPS,
+            "overall": _EPS,
         }
 
     cur = current[common_cols]
@@ -122,11 +123,15 @@ def compute_quality(current: pd.DataFrame, ground_truth: pd.DataFrame) -> Dict[s
 
     overall = 0.6 * correctness + 0.3 * completeness + 0.1 * schema_accuracy
 
+    # Clamp all to strict (0, 1) — validator rejects exactly 0.0 or 1.0
+    def _clamp(v: float) -> float:
+        return max(_EPS, min(1.0 - _EPS, v))
+
     return {
-        "correctness": round(correctness, 6),
-        "completeness": round(completeness, 6),
-        "schema_accuracy": round(schema_accuracy, 6),
-        "overall": round(overall, 6),
+        "correctness": round(_clamp(correctness), 6),
+        "completeness": round(_clamp(completeness), 6),
+        "schema_accuracy": round(_clamp(schema_accuracy), 6),
+        "overall": round(_clamp(overall), 6),
     }
 
 
