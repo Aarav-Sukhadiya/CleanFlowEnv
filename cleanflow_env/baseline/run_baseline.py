@@ -38,11 +38,13 @@ def run_episode(
     result = final_score(state)
     budget_used = state.initial_budget - state.budget_remaining
 
+    # Exclude validation_details to avoid leaking unclamped nested values
+    breakdown = {k: v for k, v in result.items() if k != "validation_details"}
     return {
         "score": result["score"],
         "steps": steps,
         "budget_used": budget_used,
-        "breakdown": result,
+        "breakdown": breakdown,
     }
 
 

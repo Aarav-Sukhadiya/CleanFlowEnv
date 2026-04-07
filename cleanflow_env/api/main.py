@@ -77,8 +77,11 @@ class GraderResponse(BaseModel):
     score: float
     correctness: float
     completeness: float
+    schema_accuracy: float
+    quality_overall: float
     efficiency: float
     action_quality: float
+    validation: float
 
 
 class TaskInfo(BaseModel):
