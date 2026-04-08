@@ -1,5 +1,10 @@
+spec_version: 1
 name: CleanFlowEnv
-version: "2.0"
+type: space
+runtime: fastapi
+app: server.app:app
+port: 7860
+version: "1.0"
 description: >
   An OpenEnv-compliant environment for evaluating AI agents on
   real-world data cleaning and ETL workflows. Agents iteratively
@@ -57,7 +62,10 @@ tasks:
     budget: 15
     expected_baseline_score: 0.88
 
-score_range: [0.0, 1.0]
+score_range:
+  min: 0.0001
+  max: 0.9999
+  exclusive: true
 deterministic: true
 random_seed: 42
 

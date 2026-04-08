@@ -46,7 +46,7 @@ env = CleanFlowEnv(task_registry=TASK_REGISTRY)
 app = FastAPI(
     title="CleanFlowEnv",
     description="OpenEnv-compliant environment for data cleaning and ETL workflows.",
-    version="2.0",
+    version="1.0",
 )
 
 app.add_middleware(
@@ -134,13 +134,13 @@ def mcp():
 
 @app.get("/")
 def root():
-    """Health check — also serves an HTML redirect for browsers."""
-    from fastapi.responses import HTMLResponse
-    return HTMLResponse(
-        content='<html><head><meta http-equiv="refresh" content="0;url=/dashboard"></head>'
-        '<body><p>Redirecting to <a href="/dashboard">dashboard</a>...</p></body></html>',
-        status_code=200,
-    )
+    """Root endpoint — returns JSON for validators, dashboard at /dashboard."""
+    return {
+        "name": "CleanFlowEnv",
+        "status": "healthy",
+        "version": "1.0",
+        "dashboard": "/dashboard",
+    }
 
 
 @app.post("/reset")
