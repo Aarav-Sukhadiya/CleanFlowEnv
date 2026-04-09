@@ -64,9 +64,7 @@ def generate_easy_task() -> Tuple[pd.DataFrame, pd.DataFrame, int, Dict[str, str
     gt = gt.drop_duplicates().reset_index(drop=True)
     # Numeric: fill with median
     gt["age"] = gt["age"].fillna(gt["age"].median())
-    gt["age"] = gt["age"].round(1)
     gt["salary"] = gt["salary"].fillna(gt["salary"].median())
-    gt["salary"] = gt["salary"].round(2)
     # Sequential identifiers: fill with next values in the pattern
     from cleanflow_env.env.actions import fill_sequential
     gt["name"] = fill_sequential(gt["name"])

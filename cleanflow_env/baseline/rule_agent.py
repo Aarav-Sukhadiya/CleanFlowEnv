@@ -78,8 +78,15 @@ class RuleBasedAgent:
                     return "sequential", None
                 return "constant", "Unknown"
 
-        # Constant "Unknown" for categorical strings
-        if any(kw in desc for kw in ["constant", "'unknown'", '"unknown"']):
+        # Constant fill — extract the specific value from description if quoted
+        if "constant" in desc:
+            # Look for quoted value: constant 'pending', constant "Unknown", etc.
+            import re as _re
+            m = _re.search(r"constant\s+['\"]([^'\"]+)['\"]", desc)
+            if m:
+                return "constant", m.group(1)
+            return "constant", "Unknown"
+        if any(kw in desc for kw in ["'unknown'", '"unknown"']):
             return "constant", "Unknown"
 
         # Forward-fill for date/time columns

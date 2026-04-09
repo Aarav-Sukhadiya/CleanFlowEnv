@@ -53,9 +53,9 @@ def generate_hard_task() -> Tuple[pd.DataFrame, pd.DataFrame, int, Dict[str, str
     visit_dates_str = []
     for i, d in enumerate(visit_dates_messy):
         if i in typo_idx:
-            visit_dates_str.append(d.strftime("%Y-%m-%d").replace("2023", "2033"))
+            visit_dates_str.append(d.strftime("%Y-%m-%d %H:%M:%S").replace("2023", "2033"))
         else:
-            visit_dates_str.append(d.strftime("%Y-%m-%d"))
+            visit_dates_str.append(d.strftime("%Y-%m-%d %H:%M:%S"))
 
     # blood_pressure outliers: inject values at Q3 + 2*IQR
     bp_series = pd.Series(blood_pressure)
