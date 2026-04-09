@@ -31,6 +31,7 @@ from cleanflow_env.tasks.task_easy import generate_easy_task
 from cleanflow_env.tasks.task_expert import generate_expert_task
 from cleanflow_env.tasks.task_hard import generate_hard_task
 from cleanflow_env.tasks.task_medium import generate_medium_task
+from cleanflow_env.tasks.task_multi import generate_multi_task
 
 # --- Task Registry ---
 TASK_REGISTRY = {
@@ -38,6 +39,7 @@ TASK_REGISTRY = {
     "task_medium": generate_medium_task,
     "task_hard": generate_hard_task,
     "task_expert": generate_expert_task,
+    "task_multi": generate_multi_task,
 }
 
 # Global environment instance — initialized eagerly
@@ -254,6 +256,7 @@ def tasks():
         TaskInfo(id="task_medium", name="Schema Normalization", difficulty="medium"),
         TaskInfo(id="task_hard", name="Advanced Cleaning", difficulty="hard"),
         TaskInfo(id="task_expert", name="Budget-Constrained Cleaning", difficulty="expert"),
+        TaskInfo(id="task_multi", name="Multi-Table Cleaning", difficulty="expert+"),
     ]
     return TasksResponse(
         tasks=task_info,

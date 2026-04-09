@@ -11,6 +11,8 @@ BUDGET_COSTS: dict[str, int] = {
     "strip_whitespace": 1,
     "map_values": 2,
     "replace_substring": 1,
+    "lookup_fill": 2,
+    "validate_foreign_key": 2,
 }
 
 TASK_BUDGETS: dict[str, int] = {
@@ -18,6 +20,7 @@ TASK_BUDGETS: dict[str, int] = {
     "task_medium": 20,
     "task_hard": 20,
     "task_expert": 15,
+    "task_multi": 25,
 }
 
 

@@ -158,6 +158,80 @@ def _dtype_compatible(dtype1: str, dtype2: str) -> bool:
     return False
 
 
+def compute_fk_integrity(
+    tables: Dict[str, pd.DataFrame],
+    relationships: List[Dict[str, Any]],
+) -> float:
+    """Compute foreign key integrity score across table relationships."""
+    if not relationships:
+        return 1.0
+    scores = []
+    for rel in relationships:
+        child = tables.get(rel["from_table"])
+        parent = tables.get(rel["to_table"])
+        if child is None or parent is None:
+            scores.append(0.0)
+            continue
+        fk_col = rel["from_column"]
+        pk_col = rel["to_column"]
+        if fk_col not in child.columns or pk_col not in parent.columns:
+            scores.append(0.0)
+            continue
+        valid_keys = set(parent[pk_col].dropna())
+        child_keys = child[fk_col].dropna()
+        if len(child_keys) == 0:
+            scores.append(1.0)
+            continue
+        matched = child_keys.isin(valid_keys).sum()
+        scores.append(matched / len(child_keys))
+    return sum(scores) / len(scores) if scores else 1.0
+
+
+def compute_quality_multi(
+    tables: Dict[str, pd.DataFrame],
+    ground_truth_tables: Dict[str, pd.DataFrame],
+    relationships: List[Dict[str, Any]] | None = None,
+) -> Dict[str, float]:
+    """Compute quality metrics across multiple tables.
+
+    Averages per-table quality and adds FK integrity as a component.
+    """
+    _EPS = 1e-4
+    per_table_quality = []
+    for name in ground_truth_tables:
+        current = tables.get(name)
+        gt = ground_truth_tables[name]
+        if current is None:
+            per_table_quality.append({
+                "correctness": _EPS, "completeness": _EPS,
+                "schema_accuracy": _EPS, "overall": _EPS,
+            })
+        else:
+            per_table_quality.append(compute_quality(current, gt))
+
+    # Average across tables
+    avg = {}
+    for key in ("correctness", "completeness", "schema_accuracy", "overall"):
+        avg[key] = sum(q[key] for q in per_table_quality) / len(per_table_quality)
+
+    # FK integrity (5% weight, taken from correctness)
+    fk_score = compute_fk_integrity(tables, relationships or [])
+    import math
+    def _clamp(v: float) -> float:
+        if not isinstance(v, (int, float)) or not math.isfinite(v):
+            return _EPS
+        return max(_EPS, min(1.0 - _EPS, float(v)))
+
+    # Adjust overall to include FK integrity
+    base_overall = avg["overall"]
+    avg["overall"] = round(_clamp(0.90 * base_overall + 0.10 * fk_score), 6)
+    avg["fk_integrity"] = round(_clamp(fk_score), 6)
+    for key in ("correctness", "completeness", "schema_accuracy"):
+        avg[key] = round(_clamp(avg[key]), 6)
+
+    return avg
+
+
 def compute_reward(
     current: pd.DataFrame,
     ground_truth: pd.DataFrame,

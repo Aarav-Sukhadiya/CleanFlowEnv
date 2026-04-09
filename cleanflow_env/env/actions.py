@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from typing import Dict, Optional
 
 import pandas as pd
 
@@ -300,8 +301,105 @@ _ACTION_DISPATCH = {
 }
 
 
-def apply_action(df: pd.DataFrame, action: ActionModel) -> pd.DataFrame:
-    """Dispatch an ActionModel to the correct cleaning function."""
+def lookup_fill(
+    tables: Dict[str, pd.DataFrame], action: ActionModel
+) -> Dict[str, pd.DataFrame]:
+    """Fill nulls in a column by looking up values from another table via FK."""
+    source = tables[action.table].copy()
+    lookup = tables[action.lookup_table]
+
+    if action.column not in source.columns:
+        raise InvalidActionError(f"Column '{action.column}' not in table '{action.table}'.")
+    if action.foreign_key_column not in source.columns:
+        raise InvalidActionError(f"FK column '{action.foreign_key_column}' not in table '{action.table}'.")
+    if action.lookup_key_column not in lookup.columns:
+        raise InvalidActionError(f"Key column '{action.lookup_key_column}' not in table '{action.lookup_table}'.")
+    if action.lookup_value_column not in lookup.columns:
+        raise InvalidActionError(f"Value column '{action.lookup_value_column}' not in table '{action.lookup_table}'.")
+
+    # Build lookup mapping (deduped — take first match)
+    lookup_map = lookup.drop_duplicates(subset=[action.lookup_key_column]).set_index(
+        action.lookup_key_column
+    )[action.lookup_value_column]
+
+    # Fill only null values using the FK relationship
+    null_mask = source[action.column].isna()
+    fk_values = source.loc[null_mask, action.foreign_key_column]
+    filled = fk_values.map(lookup_map)
+    source.loc[null_mask, action.column] = filled
+
+    result = dict(tables)
+    result[action.table] = source
+    return result
+
+
+def validate_foreign_key(
+    tables: Dict[str, pd.DataFrame], action: ActionModel
+) -> Dict[str, pd.DataFrame]:
+    """Remove rows where the FK value doesn't exist in the reference table."""
+    source = tables[action.table].copy()
+    lookup = tables[action.lookup_table]
+
+    if action.foreign_key_column not in source.columns:
+        raise InvalidActionError(f"FK column '{action.foreign_key_column}' not in table '{action.table}'.")
+    if action.lookup_key_column not in lookup.columns:
+        raise InvalidActionError(f"Key column '{action.lookup_key_column}' not in table '{action.lookup_table}'.")
+
+    valid_keys = set(lookup[action.lookup_key_column].dropna())
+    mask = source[action.foreign_key_column].isin(valid_keys) | source[action.foreign_key_column].isna()
+    source = source[mask].reset_index(drop=True)
+
+    result = dict(tables)
+    result[action.table] = source
+    return result
+
+
+_MULTI_TABLE_DISPATCH = {
+    "lookup_fill": lookup_fill,
+    "validate_foreign_key": validate_foreign_key,
+}
+
+
+def apply_action(
+    df: pd.DataFrame,
+    action: ActionModel,
+    tables: Optional[Dict[str, pd.DataFrame]] = None,
+) -> pd.DataFrame | Dict[str, pd.DataFrame]:
+    """Dispatch an ActionModel to the correct cleaning function.
+
+    For multi-table actions or when action.table is set, operates on the tables
+    dict and returns an updated dict. Otherwise operates on a single DataFrame.
+    """
+    # Multi-table action types
+    if action.action_type in _MULTI_TABLE_DISPATCH:
+        if tables is None:
+            raise InvalidActionError(f"'{action.action_type}' requires multi-table mode.")
+        handler = _MULTI_TABLE_DISPATCH[action.action_type]
+        try:
+            return handler(tables, action)
+        except InvalidActionError:
+            raise
+        except Exception as e:
+            raise InvalidActionError(f"Action failed: {e}") from e
+
+    # Single-table action targeting a specific table in multi-table mode
+    if action.table is not None and tables is not None:
+        target_df = tables.get(action.table)
+        if target_df is None:
+            raise InvalidActionError(f"Unknown table '{action.table}'.")
+        handler = _ACTION_DISPATCH.get(action.action_type)
+        if handler is None:
+            raise InvalidActionError(f"Unknown action type '{action.action_type}'.")
+        try:
+            result = dict(tables)
+            result[action.table] = handler(target_df, action)
+            return result
+        except InvalidActionError:
+            raise
+        except Exception as e:
+            raise InvalidActionError(f"Action failed: {e}") from e
+
+    # Standard single-table path
     handler = _ACTION_DISPATCH.get(action.action_type)
     if handler is None:
         raise InvalidActionError(

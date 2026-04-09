@@ -34,6 +34,19 @@ class TablePreviewRow(BaseModel):
     )
 
 
+class TableObservation(BaseModel):
+    """Observation data for a single table in multi-table mode."""
+    table_preview: List[TablePreviewRow] = Field(default_factory=list)
+    table_schema: Dict[str, str] = Field(default_factory=dict, alias="schema")
+    null_counts: Dict[str, int] = Field(default_factory=dict)
+    duplicate_count: int = 0
+    stats: Dict[str, float] = Field(default_factory=dict)
+    distribution: Dict[str, Dict[str, float]] = Field(default_factory=dict)
+    column_descriptions: Dict[str, str] = Field(default_factory=dict)
+
+    model_config = {"populate_by_name": True, "serialize_by_alias": True}
+
+
 class ObservationModel(BaseModel):
     model_config = {"populate_by_name": True, "serialize_by_alias": True}
 
@@ -115,6 +128,16 @@ class ObservationModel(BaseModel):
     column_descriptions: Dict[str, str] = Field(
         ...,
         description="Semantic description of each column including expected type, value range, and cleaning hints."
+    )
+
+    # Multi-table fields (None for single-table tasks)
+    tables: Optional[Dict[str, TableObservation]] = Field(
+        default=None,
+        description="Per-table observation data in multi-table mode. None for single-table tasks.",
+    )
+    table_relationships: Optional[List[Dict[str, str]]] = Field(
+        default=None,
+        description="Foreign key relationships between tables.",
     )
 
     # Validates that table_preview never exceeds 10 rows.

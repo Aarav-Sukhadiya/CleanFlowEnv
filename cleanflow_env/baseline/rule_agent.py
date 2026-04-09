@@ -103,84 +103,160 @@ class RuleBasedAgent:
     def act(self, obs: ObservationModel) -> Optional[ActionModel]:
         """Return the next action or None if all useful actions are exhausted."""
 
-        # Priority 1: Drop duplicates whenever they exist.
-        # Checked at the top of every step because null-filling can CREATE new
-        # duplicates (rows that differed only by NaN become identical after fill).
-        if obs.duplicate_count > 0:
-            action = ActionModel(action_type="drop_duplicates")
-            self._record("drop_duplicates", None)
-            return action
+        # Multi-table mode: delegate to per-table logic
+        if obs.tables:
+            return self._act_multi(obs)
 
-        # Priority 2: Fill nulls
-        for col, count in obs.null_counts.items():
-            if count > 0 and not self._is_done("fill_null", col):
-                method, constant_value = self._pick_fill_method(
-                    col, obs.column_descriptions, obs.table_schema, obs
+        return self._act_single(obs, obs.table_schema, obs.null_counts,
+                                obs.duplicate_count, obs.column_descriptions,
+                                obs.table_preview, table_name=None)
+
+    def _act_multi(self, obs: ObservationModel) -> Optional[ActionModel]:
+        """Handle multi-table action selection."""
+        # Priority 0: Validate foreign keys (remove orphan rows early)
+        for rel in (obs.table_relationships or []):
+            key = f"validate_fk:{rel['from_table']}.{rel['from_column']}"
+            if not self._is_done("validate_foreign_key", key):
+                self._record("validate_foreign_key", key)
+                return ActionModel(
+                    action_type="validate_foreign_key",
+                    column=rel["from_column"],
+                    table=rel["from_table"],
+                    foreign_key_column=rel["from_column"],
+                    lookup_table=rel["to_table"],
+                    lookup_key_column=rel["to_column"],
                 )
-                action = ActionModel(
-                    action_type="fill_null",
-                    column=col,
-                    method=method,
-                    constant_value=constant_value,
-                )
-                self._record("fill_null", col)
+
+        # Then run standard cleaning per table
+        for table_name, table_obs in obs.tables.items():
+            action = self._act_single(
+                obs, table_obs.table_schema, table_obs.null_counts,
+                table_obs.duplicate_count, table_obs.column_descriptions,
+                table_obs.table_preview, table_name=table_name,
+            )
+            if action is not None:
                 return action
 
-        # Priority 3: Strip whitespace on columns that mention it
-        for col, dtype in obs.table_schema.items():
-            desc = obs.column_descriptions.get(col, "").lower()
+        return None
+
+    def _act_single(
+        self, obs: ObservationModel,
+        schema: Dict[str, str], null_counts: Dict[str, int],
+        duplicate_count: int, column_descriptions: Dict[str, str],
+        table_preview, table_name: Optional[str] = None,
+    ) -> Optional[ActionModel]:
+        """Core single-table action selection logic."""
+
+        def _key(col: Optional[str]) -> str:
+            """Prefix column with table name for uniqueness in multi-table mode."""
+            if table_name and col:
+                return f"{table_name}.{col}"
+            return col or ""
+
+        def _make(action_type: str, **kwargs) -> ActionModel:
+            if table_name:
+                kwargs["table"] = table_name
+            return ActionModel(action_type=action_type, **kwargs)
+
+        # Priority 1: Drop duplicates whenever they exist.
+        if duplicate_count > 0:
+            action = _make("drop_duplicates")
+            self._record("drop_duplicates", _key(None))
+            return action
+
+        # Priority 2: Strip whitespace on columns that mention it
+        for col, dtype in schema.items():
+            desc = column_descriptions.get(col, "").lower()
             if dtype == "string" and "whitespace" in desc:
-                if not self._is_done("strip_whitespace", col):
-                    action = ActionModel(
-                        action_type="strip_whitespace", column=col
-                    )
-                    self._record("strip_whitespace", col)
+                if not self._is_done("strip_whitespace", _key(col)):
+                    action = _make("strip_whitespace", column=col)
+                    self._record("strip_whitespace", _key(col))
                     return action
 
-        # Priority 4: Replace substrings (currency symbols, commas, year typos)
-        for col, dtype in obs.table_schema.items():
-            desc = obs.column_descriptions.get(col, "").lower()
+        # Priority 3: Replace substrings (currency symbols, commas, year typos)
+        # Must run BEFORE fill_null so numeric columns are clean for median/mean
+        for col, dtype in schema.items():
+            desc = column_descriptions.get(col, "").lower()
             if dtype == "string":
                 # Currency: remove $ and , before numeric conversion
                 if any(kw in desc for kw in ["'$'", '"$"', "currency", "usd"]) and ("'$'" in desc or '"$"' in desc or ("$" in desc and "string" in desc)):
-                    if not self._is_done("replace_substring_dollar", col):
-                        action = ActionModel(
-                            action_type="replace_substring",
+                    if not self._is_done("replace_substring_dollar", _key(col)):
+                        action = _make(
+                            "replace_substring",
                             column=col,
                             old_value="$",
                             new_value="",
                         )
-                        self._record("replace_substring_dollar", col)
+                        self._record("replace_substring_dollar", _key(col))
                         return action
-                    if not self._is_done("replace_substring_comma", col):
-                        action = ActionModel(
-                            action_type="replace_substring",
+                    if not self._is_done("replace_substring_comma", _key(col)):
+                        action = _make(
+                            "replace_substring",
                             column=col,
                             old_value=",",
                             new_value="",
                         )
-                        self._record("replace_substring_comma", col)
+                        self._record("replace_substring_comma", _key(col))
                         return action
 
                 # Year typos: 2033 → 2023
                 if "2033" in desc and "2023" in desc:
-                    if not self._is_done("replace_substring", col):
-                        action = ActionModel(
-                            action_type="replace_substring",
+                    if not self._is_done("replace_substring", _key(col)):
+                        action = _make(
+                            "replace_substring",
                             column=col,
                             old_value="2033",
                             new_value="2023",
                         )
-                        self._record("replace_substring", col)
+                        self._record("replace_substring", _key(col))
                         return action
 
-        # Priority 5: Map categorical values (boolean-like columns)
-        for col, dtype in obs.table_schema.items():
-            desc = obs.column_descriptions.get(col, "").lower()
+        # Priority 4: Convert types based on descriptions
+        # Must run BEFORE fill_null so numeric fills (median/mean) work on proper dtypes
+        for col, dtype in schema.items():
+            desc = column_descriptions.get(col, "").lower()
+            if dtype == "string":
+                if "datetime" in desc and "no cleaning" not in desc and "no action" not in desc and "no conversion" not in desc and "no type conversion" not in desc:
+                    if not self._is_done("convert_type", _key(col)):
+                        action = _make(
+                            "convert_type",
+                            column=col,
+                            target_type="datetime",
+                        )
+                        self._record("convert_type", _key(col))
+                        return action
+                if any(kw in desc for kw in ["numeric", "float", "price", "amount", "usd", "$"]):
+                    if not self._is_done("convert_type", _key(col)):
+                        action = _make(
+                            "convert_type",
+                            column=col,
+                            target_type="float",
+                        )
+                        self._record("convert_type", _key(col))
+                        return action
+
+        # Priority 5: Fill nulls
+        for col, count in null_counts.items():
+            if count > 0 and not self._is_done("fill_null", _key(col)):
+                method, constant_value = self._pick_fill_method(
+                    col, column_descriptions, schema, obs
+                )
+                action = _make(
+                    "fill_null",
+                    column=col,
+                    method=method,
+                    constant_value=constant_value,
+                )
+                self._record("fill_null", _key(col))
+                return action
+
+        # Priority 6: Map categorical values (boolean-like columns)
+        for col, dtype in schema.items():
+            desc = column_descriptions.get(col, "").lower()
             if "boolean" in desc or ("map to boolean" in desc) or ("yes" in desc and "no" in desc and "date" not in desc):
-                if dtype == "string" and not self._is_done("map_values", col):
-                    action = ActionModel(
-                        action_type="map_values",
+                if dtype == "string" and not self._is_done("map_values", _key(col)):
+                    action = _make(
+                        "map_values",
                         column=col,
                         mapping={
                             "yes": True, "Yes": True, "YES": True,
@@ -190,41 +266,16 @@ class RuleBasedAgent:
                             "1": True, "0": False,
                         },
                     )
-                    self._record("map_values", col)
+                    self._record("map_values", _key(col))
                     return action
 
-        # Priority 6: Convert types based on descriptions
-        for col, dtype in obs.table_schema.items():
-            desc = obs.column_descriptions.get(col, "").lower()
-            if dtype == "string":
-                if "datetime" in desc and "no cleaning" not in desc and "no action" not in desc and "no conversion" not in desc and "no type conversion" not in desc:
-                    if not self._is_done("convert_type", col):
-                        action = ActionModel(
-                            action_type="convert_type",
-                            column=col,
-                            target_type="datetime",
-                        )
-                        self._record("convert_type", col)
-                        return action
-                if any(kw in desc for kw in ["numeric", "float", "price", "amount", "usd", "$"]):
-                    if not self._is_done("convert_type", col):
-                        action = ActionModel(
-                            action_type="convert_type",
-                            column=col,
-                            target_type="float",
-                        )
-                        self._record("convert_type", col)
-                        return action
-
         # Priority 7: Remove outliers on numeric columns mentioned in descriptions
-        for col, dtype in obs.table_schema.items():
-            desc = obs.column_descriptions.get(col, "").lower()
+        for col, dtype in schema.items():
+            desc = column_descriptions.get(col, "").lower()
             if dtype in ("float", "int") and "outlier" in desc:
-                if not self._is_done("remove_outliers", col):
-                    action = ActionModel(
-                        action_type="remove_outliers", column=col
-                    )
-                    self._record("remove_outliers", col)
+                if not self._is_done("remove_outliers", _key(col)):
+                    action = _make("remove_outliers", column=col)
+                    self._record("remove_outliers", _key(col))
                     return action
 
         return None

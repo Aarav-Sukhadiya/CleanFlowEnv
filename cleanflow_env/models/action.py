@@ -24,9 +24,20 @@ class ActionModel(BaseModel):
         "strip_whitespace",
         "map_values",
         "replace_substring",
+        "lookup_fill",
+        "validate_foreign_key",
     ]
 
     column: Optional[str] = None
+
+    # Multi-table support: target table name (None = single-table mode)
+    table: Optional[str] = None
+
+    # For lookup_fill / validate_foreign_key: foreign key relationship
+    foreign_key_column: Optional[str] = None
+    lookup_table: Optional[str] = None
+    lookup_key_column: Optional[str] = None
+    lookup_value_column: Optional[str] = None
 
     method: Optional[Literal["mean", "median", "mode", "constant", "forward_fill", "backward_fill", "sequential"]] = None
 
@@ -81,5 +92,29 @@ class ActionModel(BaseModel):
                 raise ValueError("replace_substring requires 'old_value' to be specified.")
             if self.new_value is None:
                 raise ValueError("replace_substring requires 'new_value' to be specified.")
+
+        elif action == "lookup_fill":
+            if self.table is None:
+                raise ValueError("lookup_fill requires 'table' to be specified.")
+            if self.column is None:
+                raise ValueError("lookup_fill requires 'column' (column to fill) to be specified.")
+            if self.foreign_key_column is None:
+                raise ValueError("lookup_fill requires 'foreign_key_column' to be specified.")
+            if self.lookup_table is None:
+                raise ValueError("lookup_fill requires 'lookup_table' to be specified.")
+            if self.lookup_key_column is None:
+                raise ValueError("lookup_fill requires 'lookup_key_column' to be specified.")
+            if self.lookup_value_column is None:
+                raise ValueError("lookup_fill requires 'lookup_value_column' to be specified.")
+
+        elif action == "validate_foreign_key":
+            if self.table is None:
+                raise ValueError("validate_foreign_key requires 'table' to be specified.")
+            if self.foreign_key_column is None:
+                raise ValueError("validate_foreign_key requires 'foreign_key_column' to be specified.")
+            if self.lookup_table is None:
+                raise ValueError("validate_foreign_key requires 'lookup_table' to be specified.")
+            if self.lookup_key_column is None:
+                raise ValueError("validate_foreign_key requires 'lookup_key_column' to be specified.")
 
         return self

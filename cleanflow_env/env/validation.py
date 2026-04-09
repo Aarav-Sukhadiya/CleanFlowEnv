@@ -127,6 +127,65 @@ def validate_cleaned_data(
     }
 
 
+def validate_cleaned_data_multi(
+    tables: Dict[str, pd.DataFrame],
+    ground_truth_tables: Dict[str, pd.DataFrame],
+    column_descriptions_multi: Dict[str, Dict[str, str]],
+    table_relationships: List[Dict[str, str]] | None = None,
+) -> Dict[str, Any]:
+    """Run validation rules across multiple tables, including FK integrity."""
+    all_passed = 0
+    all_total = 0
+    all_violations: List[str] = []
+
+    for name, gt in ground_truth_tables.items():
+        cleaned = tables.get(name)
+        if cleaned is None:
+            all_violations.append(f"MISSING_TABLE: table '{name}' not found")
+            all_total += 1
+            continue
+        col_desc = column_descriptions_multi.get(name, {})
+        result = validate_cleaned_data(cleaned, gt, col_desc)
+        all_passed += result["rules_passed"]
+        all_total += result["rules_total"]
+        all_violations.extend(f"[{name}] {v}" for v in result.get("violations", []))
+
+    # FK integrity rules
+    for rel in (table_relationships or []):
+        all_total += 1
+        child_table = tables.get(rel["from_table"])
+        parent_table = tables.get(rel["to_table"])
+        if child_table is None or parent_table is None:
+            all_violations.append(f"FK_MISSING_TABLE: {rel['from_table']} or {rel['to_table']} missing")
+            continue
+        fk_col = rel["from_column"]
+        pk_col = rel["to_column"]
+        if fk_col not in child_table.columns or pk_col not in parent_table.columns:
+            all_violations.append(f"FK_MISSING_COLUMN: {fk_col} or {pk_col}")
+            continue
+        valid_keys = set(parent_table[pk_col].dropna())
+        orphans = child_table[fk_col].dropna()
+        orphan_count = int((~orphans.isin(valid_keys)).sum())
+        if orphan_count == 0:
+            all_passed += 1
+        else:
+            all_violations.append(
+                f"FK_VIOLATION: {rel['from_table']}.{fk_col} has {orphan_count} "
+                f"orphan values not in {rel['to_table']}.{pk_col}"
+            )
+
+    raw = all_passed / all_total if all_total > 0 else 1.0
+    _EPS = 1e-4
+    validation_score = max(_EPS, min(1.0 - _EPS, raw))
+
+    return {
+        "validation_score": round(validation_score, 6),
+        "rules_passed": all_passed,
+        "rules_total": all_total,
+        "violations": all_violations,
+    }
+
+
 def _dtype_compatible(dtype1: str, dtype2: str) -> bool:
     """Check if two dtype strings are compatible."""
     numeric_types = {"int64", "int32", "Int64", "Int32", "float64", "float32"}

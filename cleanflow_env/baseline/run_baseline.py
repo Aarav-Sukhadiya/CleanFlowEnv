@@ -85,12 +85,14 @@ if __name__ == "__main__":
     from cleanflow_env.tasks.task_expert import generate_expert_task
     from cleanflow_env.tasks.task_hard import generate_hard_task
     from cleanflow_env.tasks.task_medium import generate_medium_task
+    from cleanflow_env.tasks.task_multi import generate_multi_task
 
     registry = {
         "task_easy": generate_easy_task,
         "task_medium": generate_medium_task,
         "task_hard": generate_hard_task,
         "task_expert": generate_expert_task,
+        "task_multi": generate_multi_task,
     }
     env = CleanFlowEnv(task_registry=registry)
     results = run_baseline_all(env)

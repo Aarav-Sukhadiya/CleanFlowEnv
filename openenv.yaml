@@ -64,6 +64,12 @@ tasks:
     description: "All issue types combined with distractor columns under a tight 15-credit budget (500 rows, 10 columns)."
     budget: 15
     expected_baseline_score: 0.88
+  - id: task_multi
+    name: Multi-Table Cleaning
+    difficulty: expert+
+    description: "Two linked tables (customers 100 rows, orders 300 rows) with FK relationships, orphan keys, mixed formats, and cross-table issues."
+    budget: 25
+    expected_baseline_score: 0.85
 
 score_range:
   min: 0.0001
@@ -120,3 +126,11 @@ action_types:
     required_fields: [column]
     cost: 3
     rule: "IQR x 1.5 exclusively"
+  lookup_fill:
+    required_fields: [column, table, foreign_key_column, lookup_table, lookup_key_column, lookup_value_column]
+    cost: 2
+    description: "Fill nulls via FK lookup from another table"
+  validate_foreign_key:
+    required_fields: [column, table, foreign_key_column, lookup_table, lookup_key_column]
+    cost: 2
+    description: "Remove rows with orphan FK values"

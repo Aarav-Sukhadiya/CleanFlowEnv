@@ -3,9 +3,9 @@ from __future__ import annotations
 import math
 from typing import Any, Dict, List
 
-from cleanflow_env.env.rewards import compute_quality
+from cleanflow_env.env.rewards import compute_quality, compute_quality_multi
 from cleanflow_env.env.state import EnvironmentState
-from cleanflow_env.env.validation import validate_cleaned_data
+from cleanflow_env.env.validation import validate_cleaned_data, validate_cleaned_data_multi
 
 
 def final_score(state: EnvironmentState) -> Dict[str, float]:
@@ -25,7 +25,12 @@ def final_score(state: EnvironmentState) -> Dict[str, float]:
     per-step signal — an agent optimizing per-step reward also pushes
     toward a higher final score.
     """
-    quality = compute_quality(state.current_table, state.ground_truth)
+    if state.is_multi_table:
+        quality = compute_quality_multi(
+            state.tables, state.ground_truth_tables, state.table_relationships
+        )
+    else:
+        quality = compute_quality(state.current_table, state.ground_truth)
 
     # Per-step quality components (already computed and used during episode)
     quality_overall = quality["overall"]
@@ -55,9 +60,16 @@ def final_score(state: EnvironmentState) -> Dict[str, float]:
         action_quality = 1.0 - (redundant / len(history))
 
     # Validation: fraction of data validation rules passed
-    validation_result = validate_cleaned_data(
-        state.current_table, state.ground_truth, state.column_descriptions
-    )
+    if state.is_multi_table:
+        validation_result = validate_cleaned_data_multi(
+            state.tables, state.ground_truth_tables,
+            state.column_descriptions_multi or {},
+            state.table_relationships,
+        )
+    else:
+        validation_result = validate_cleaned_data(
+            state.current_table, state.ground_truth, state.column_descriptions
+        )
     validation = validation_result["validation_score"]
 
     # Validator requires all scores strictly in (0, 1)
