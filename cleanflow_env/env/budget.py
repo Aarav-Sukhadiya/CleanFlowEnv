@@ -11,6 +11,7 @@ BUDGET_COSTS: dict[str, int] = {
     "strip_whitespace": 1,
     "map_values": 2,
     "replace_substring": 1,
+    "standardize_format": 2,
     "lookup_fill": 2,
     "validate_foreign_key": 2,
 }

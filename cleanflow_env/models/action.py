@@ -24,6 +24,7 @@ class ActionModel(BaseModel):
         "strip_whitespace",
         "map_values",
         "replace_substring",
+        "standardize_format",
         "lookup_fill",
         "validate_foreign_key",
     ]
@@ -75,7 +76,7 @@ class ActionModel(BaseModel):
             if self.target_type is None:
                 raise ValueError("convert_type requires 'target_type' to be specified (int, float, datetime, string).")
 
-        elif action in ("normalize", "remove_outliers", "strip_whitespace"):
+        elif action in ("normalize", "remove_outliers", "strip_whitespace", "standardize_format"):
             if self.column is None:
                 raise ValueError(f"{action} requires 'column' to be specified.")
 

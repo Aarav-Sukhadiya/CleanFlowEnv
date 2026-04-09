@@ -130,6 +130,10 @@ action_types:
     required_fields: [column, table, foreign_key_column, lookup_table, lookup_key_column, lookup_value_column]
     cost: 2
     description: "Fill nulls via FK lookup from another table"
+  standardize_format:
+    required_fields: [column]
+    cost: 2
+    description: "Standardize mixed-format ID columns to consistent prefix+number pattern"
   validate_foreign_key:
     required_fields: [column, table, foreign_key_column, lookup_table, lookup_key_column]
     cost: 2

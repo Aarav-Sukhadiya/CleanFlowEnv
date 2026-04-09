@@ -173,7 +173,20 @@ class RuleBasedAgent:
                     self._record("strip_whitespace", _key(col))
                     return action
 
-        # Priority 3: Replace substrings (currency symbols, commas, year typos)
+        # Priority 3: Standardize mixed-format ID columns (e.g. P001/1/001 → P001)
+        for col, dtype in schema.items():
+            desc = column_descriptions.get(col, "").lower()
+            # Only trigger on identifier/ID columns with mixed format hints
+            is_id_col = any(kw in desc for kw in ["identifier", " id", "id "])
+            has_format_issue = any(kw in desc for kw in ["mixed", "expected pattern", "standardize"])
+            if dtype == "string" and is_id_col and has_format_issue:
+                if "no cleaning" not in desc and "no action" not in desc:
+                    if not self._is_done("standardize_format", _key(col)):
+                        action = _make("standardize_format", column=col)
+                        self._record("standardize_format", _key(col))
+                        return action
+
+        # Priority 4: Replace substrings (currency symbols, commas, year typos)
         # Must run BEFORE fill_null so numeric columns are clean for median/mean
         for col, dtype in schema.items():
             desc = column_descriptions.get(col, "").lower()

@@ -66,6 +66,7 @@ def list_actions() -> str:
         ("convert_type", 2, "Convert column dtype (target_type: int/float/datetime/string)"),
         ("map_values", 2, "Map categorical values (e.g. yes/no -> True/False)"),
         ("normalize", 2, "Scale column values (method: minmax/zscore)"),
+        ("standardize_format", 2, "Standardize mixed-format ID columns to consistent prefix+number pattern"),
         ("validate_foreign_key", 2, "Remove rows with orphan FK references (multi-table)"),
         ("lookup_fill", 2, "Fill nulls via FK lookup from another table (multi-table)"),
         ("remove_outliers", 3, "Remove outliers using IQR x 1.5 rule"),
@@ -128,7 +129,7 @@ def apply_action(
     Args:
         action_type: One of fill_null, drop_duplicates, strip_whitespace, replace_substring,
                      convert_type, map_values, normalize, remove_outliers,
-                     validate_foreign_key, lookup_fill
+                     standardize_format, validate_foreign_key, lookup_fill
         column: Target column name (required for most actions)
         method: Fill method (mean/median/mode/constant/forward_fill/backward_fill/sequential)
                 or normalize method (minmax/zscore)

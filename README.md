@@ -25,7 +25,7 @@ Data cleaning accounts for **60-80% of real-world data work**, yet there are ver
 
 ## Key Features
 
-- **10 structured cleaning actions** — fill nulls, drop duplicates, strip whitespace, replace substrings, convert types, map categorical values, normalize columns, remove outliers, validate foreign keys, and lookup fill
+- **11 structured cleaning actions** — fill nulls, drop duplicates, strip whitespace, replace substrings, convert types, map categorical values, normalize columns, remove outliers, validate foreign keys, and lookup fill
 - **5 difficulty-tiered tasks** — from basic null-filling (Easy) to multi-table cross-FK cleaning (Expert+)
 - **Custom dataset support** — upload any CSV and auto-generate a cleaning task with ground truth at easy/medium/hard difficulty
 - **MCP tool server** — expose all cleaning actions as MCP tools so any MCP-compatible LLM agent (Claude, GPT, etc.) can interact directly
@@ -68,6 +68,7 @@ Data cleaning accounts for **60-80% of real-world data work**, yet there are ver
 | `convert_type` | `column`, `target_type` | 2 | Convert column dtype (int/float/datetime/string) |
 | `map_values` | `column`, `mapping` | 2 | Remap categorical values (e.g. yes/no/1/0 → True/False) |
 | `normalize` | `column`, `method` | 2 | Scale column values (minmax/zscore) |
+| `standardize_format` | `column` | 2 | Standardize mixed-format ID columns to consistent prefix+number pattern |
 | `validate_foreign_key` | `column`, `table`, `foreign_key_column`, `lookup_table`, `lookup_key_column` | 2 | Remove rows with orphan FK references |
 | `lookup_fill` | `column`, `table`, `foreign_key_column`, `lookup_table`, `lookup_key_column`, `lookup_value_column` | 2 | Fill nulls via FK lookup from another table |
 | `remove_outliers` | `column` | 3 | Remove outliers using IQR x 1.5 rule |
@@ -209,7 +210,7 @@ The rule-based baseline agent uses a deterministic 7-priority decision strategy 
 |------|-------|-------|-------------|
 | Task 1 (Easy) | ~0.94 | 7 | 8 / 20 |
 | Task 2 (Medium) | ~0.92 | 6 | 9 / 20 |
-| Task 3 (Hard) | ~0.88 | 4 | 9 / 20 |
+| Task 3 (Hard) | ~0.90 | 5 | 11 / 20 |
 | Task 4 (Expert) | ~0.88 | 7 | 11 / 15 |
 | Task 5 (Multi-Table) | ~0.86 | 13 | 17 / 25 |
 | **Average** | **~0.89** | | |

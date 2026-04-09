@@ -97,6 +97,72 @@ def fill_sequential(col: pd.Series) -> pd.Series:
     return result
 
 
+def standardize_format(df: pd.DataFrame, column: str) -> pd.DataFrame:
+    """Standardize mixed-format ID columns to a consistent prefix+number pattern.
+
+    Detects the dominant prefix+number pattern in the column (e.g. "P001")
+    and reformats all values to match. Handles cases like:
+      - "P001" (already correct)
+      - "1" (bare number → "P001")
+      - "001" (zero-padded without prefix → "P001")
+
+    Falls back to no-op if no dominant pattern is found.
+    """
+    result = df.copy()
+    if column not in result.columns:
+        raise InvalidActionError(f"Column '{column}' not found in table.")
+
+    col = result[column].copy()
+    non_null = col.dropna().astype(str)
+    if len(non_null) < 2:
+        return result
+
+    # Detect prefix+number pattern
+    pat = re.compile(r"^(.*?)(\d+)$")
+    prefix_counts: dict[str, int] = {}
+    prefix_widths: dict[str, set[int]] = {}
+
+    for val in non_null:
+        m = pat.match(val)
+        if m:
+            prefix = m.group(1)
+            prefix_counts[prefix] = prefix_counts.get(prefix, 0) + 1
+            prefix_widths.setdefault(prefix, set()).add(len(m.group(2)))
+
+    if not prefix_counts:
+        return result
+
+    # The dominant prefix is the one with the most matches AND has a non-empty prefix
+    # This picks "P" over "" when both exist
+    prefixed = {p: c for p, c in prefix_counts.items() if p}
+    if prefixed:
+        best_prefix = max(prefixed, key=lambda p: prefixed[p])
+    else:
+        best_prefix = max(prefix_counts, key=lambda p: prefix_counts[p])
+
+    # Determine zero-padding width from the dominant prefix's values
+    widths = prefix_widths.get(best_prefix, set())
+    if len(widths) == 1:
+        fmt = f"0{widths.pop()}d"
+    else:
+        # Use the most common width
+        fmt = "d"
+
+    # Reformat all values
+    def _reformat(val):
+        if pd.isna(val):
+            return val
+        s = str(val)
+        m = pat.match(s)
+        if m:
+            num = int(m.group(2))
+            return f"{best_prefix}{num:{fmt}}"
+        return val  # Leave non-matching values unchanged
+
+    result[column] = col.map(_reformat)
+    return result
+
+
 def fill_null(
     df: pd.DataFrame, column: str, method: str, constant_value=None
 ) -> pd.DataFrame:
@@ -298,6 +364,7 @@ _ACTION_DISPATCH = {
     "replace_substring": lambda df, action: replace_substring(
         df, action.column, action.old_value or "", action.new_value or ""
     ),
+    "standardize_format": lambda df, action: standardize_format(df, action.column),
 }
 
 

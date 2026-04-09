@@ -108,6 +108,9 @@ def _describe_action(action, rows_before: int, rows_after: int, env_state) -> st
         method = action.outlier_method or "iqr"
         return f"Removed {removed} outlier rows from {col} using {method.upper()} ({rows_before} -> {rows_after} rows)"
 
+    elif a == "standardize_format":
+        return f"Standardized mixed formats in {col} to consistent pattern"
+
     elif a == "validate_foreign_key":
         table = getattr(action, "table", None) or ""
         lookup = getattr(action, "lookup_table", None) or ""
@@ -1071,7 +1074,7 @@ def create_dashboard() -> gr.Blocks:
                         choices=[
                             "fill_null", "drop_duplicates", "strip_whitespace",
                             "replace_substring", "convert_type", "map_values",
-                            "normalize", "remove_outliers",
+                            "normalize", "remove_outliers", "standardize_format",
                         ],
                         value="fill_null",
                         label="Action Type",
@@ -1341,6 +1344,7 @@ def create_dashboard() -> gr.Blocks:
                     | `convert_type` | 2 | Convert column dtype (int/float/datetime/string) |
                     | `map_values` | 2 | Map categorical values (e.g. "yes"/"no" → True/False) |
                     | `normalize` | 2 | Scale column values (minmax/zscore) |
+                    | `standardize_format` | 2 | Standardize mixed-format ID columns (e.g. P001/1/001 → P001) |
                     | `validate_foreign_key` | 2 | Remove rows with orphan FK references |
                     | `lookup_fill` | 2 | Fill nulls via FK lookup from another table |
                     | `remove_outliers` | 3 | Remove outliers using IQR x 1.5 rule |
