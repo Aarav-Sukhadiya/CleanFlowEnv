@@ -28,6 +28,9 @@ Data cleaning accounts for **60-80% of real-world data work**, yet there are ver
 - **10 structured cleaning actions** — fill nulls, drop duplicates, strip whitespace, replace substrings, convert types, map categorical values, normalize columns, remove outliers, validate foreign keys, and lookup fill
 - **5 difficulty-tiered tasks** — from basic null-filling (Easy) to multi-table cross-FK cleaning (Expert+)
 - **Custom dataset support** — upload any CSV and auto-generate a cleaning task with ground truth at easy/medium/hard difficulty
+- **MCP tool server** — expose all cleaning actions as MCP tools so any MCP-compatible LLM agent (Claude, GPT, etc.) can interact directly
+- **Human-in-the-loop mode** — interactive dashboard tab where you manually pick actions step by step and try to beat the baseline
+- **LLM agent benchmark** — side-by-side comparison of baseline vs. your LLM agent scores across all tasks
 - **Interactive Gradio dashboard** — visual step-by-step demo at `/dashboard` with live table previews, quality progress tracking, and one-click baseline execution
 - **Exploit-resistant reward design** — high-water mark prevents apply-undo-apply oscillation; harmful and redundant actions are penalized
 - **1-step observation lag** — table preview reflects the previous step, forcing agents to reason about whether their action worked instead of trivially reading and repeating
@@ -124,11 +127,12 @@ Termination conditions: max 20 steps, budget exhausted, or perfect quality (1.0)
 
 CleanFlowEnv includes a **Gradio-powered interactive dashboard** accessible at `/dashboard` that provides:
 
-- **Task selector** — choose any built-in task or upload a custom CSV
-- **Step-by-step visualization** — watch the table transform as actions are applied
-- **Live metrics** — null counts, duplicate counts, quality progress, and budget usage update in real time
-- **One-click baseline** — run the rule-based agent and see its full action sequence
-- **Score breakdown** — view the final grading report with all 5 components
+- **Run Episode** — choose any built-in task and watch the baseline agent clean it step by step
+- **Baseline Benchmark** — run the agent on all 5 tasks and see comparative scores
+- **Interactive Mode** — human-in-the-loop cleaning where you pick actions manually
+- **LLM Benchmark** — compare your LLM agent's scores against the rule-based baseline
+- **Custom Dataset** — upload a CSV and auto-generate a cleaning task
+- **Live metrics** — null counts, duplicate counts, quality progress, and budget usage
 
 The dashboard is mounted alongside the API, so both are available when the server is running.
 
@@ -165,7 +169,9 @@ python simulate.py
 | `GET` | `/tasks` | List available tasks and action schema |
 | `POST` | `/grade/{task_id}` | Stateless per-task grading |
 | `POST` | `/baseline` | Run rule-based baseline on all tasks |
-| `GET` | `/dashboard` | Interactive Gradio UI |
+| `POST` | `/mcp` | MCP tool discovery (lists available tools) |
+| `GET` | `/mcp/sse` | MCP SSE endpoint for agent connections |
+| `GET` | `/dashboard` | Interactive Gradio UI (6 tabs) |
 
 ### Example API Calls
 
@@ -214,7 +220,8 @@ The rule-based baseline agent uses a deterministic 7-priority decision strategy 
 cleanflow_env/
 ├── api/
 │   ├── main.py              # FastAPI endpoints (reset, step, state, grader, tasks, baseline)
-│   └── dashboard.py          # Gradio interactive dashboard (mounted at /dashboard)
+│   ├── dashboard.py          # Gradio interactive dashboard (6 tabs, mounted at /dashboard)
+│   └── mcp_server.py         # MCP tool server (5 tools for LLM agent integration)
 ├── baseline/
 │   ├── rule_agent.py         # Rule-based deterministic agent (7-priority strategy)
 │   └── run_baseline.py       # Baseline episode runner
@@ -274,7 +281,9 @@ Correctness is measured by comparing sorted column values rather than row-aligne
 
 ## Future Extensions
 
+- Undo/redo actions with exploration-friendly reward shaping
 - Streaming data cleaning (mini-batch episodes)
 - Noisy real-world datasets from public data portals
-- Human-in-the-loop feedback mode
-- Leaderboard integration via HF Spaces
+- Column-level difficulty scoring based on issue density
+- Auto-generated task variants with configurable issue mixes
+- Persistent leaderboard integration via HF Spaces

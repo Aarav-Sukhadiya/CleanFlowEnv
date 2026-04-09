@@ -5,7 +5,7 @@ Provides a visual, interactive demo for judges and users.
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import gradio as gr
 import pandas as pd
@@ -692,6 +692,209 @@ def run_custom_episode(file_obj, gt_file_obj, budget, difficulty):
     )
 
 
+# ── Interactive (Human-in-the-loop) state ────────────────────────────────────
+
+_interactive_env: Optional[CleanFlowEnv] = None
+_interactive_steps: List[Dict[str, Any]] = []
+
+
+def _hitl_reset(task_id: str):
+    """Reset interactive environment for a new human-driven episode."""
+    global _interactive_env, _interactive_steps
+    _interactive_env = CleanFlowEnv(task_registry=TASK_REGISTRY)
+    _interactive_steps = []
+    obs = _interactive_env.reset(task_id)
+
+    is_multi = _interactive_env._state.is_multi_table
+    if is_multi:
+        cols = []
+        for name, t_obs in obs.tables.items():
+            cols.extend(f"{name}.{c}" for c in t_obs.table_schema.keys())
+        nulls_total = sum(
+            sum(t_obs.null_counts.values()) for t_obs in obs.tables.values()
+        )
+        dups_total = sum(t_obs.duplicate_count for t_obs in obs.tables.values())
+    else:
+        cols = list(obs.table_schema.keys())
+        nulls_total = sum(obs.null_counts.values())
+        dups_total = obs.duplicate_count
+
+    preview = _interactive_env._state.current_table.head(10).fillna("NULL").reset_index(drop=True)
+
+    stats_html = format_initial_stats_html(nulls_total, dups_total, obs.budget_remaining, task_id)
+
+    desc_lines = []
+    if is_multi:
+        for tname, t_obs in obs.tables.items():
+            for col, desc in t_obs.column_descriptions.items():
+                desc_lines.append(f"**{tname}.{col}**: {desc}")
+    else:
+        for col, desc in obs.column_descriptions.items():
+            desc_lines.append(f"**{col}**: {desc}")
+
+    hints = "\n\n".join(desc_lines) if desc_lines else "No column descriptions available."
+
+    steps_df = pd.DataFrame(columns=["Step", "Action", "Column", "Detail", "Reward", "Budget Left"])
+
+    return (
+        stats_html,
+        preview,
+        gr.update(choices=cols, value=cols[0] if cols else None),
+        hints,
+        steps_df,
+        "",  # score html
+        f"**Episode started** — {TASK_LABELS.get(task_id, task_id)}. Pick an action below.",
+    )
+
+
+def _hitl_step(action_type, column, method, constant_value, old_value, new_value, target_type):
+    """Apply one human-chosen action."""
+    global _interactive_steps
+
+    if _interactive_env is None or _interactive_env._state is None:
+        return (
+            pd.DataFrame(), "", "",
+            "**Error:** No active episode. Click Reset first.",
+        )
+
+    action_dict: Dict[str, Any] = {"action_type": action_type}
+
+    # Handle multi-table column references (table.column)
+    if column and "." in column:
+        parts = column.split(".", 1)
+        action_dict["table"] = parts[0]
+        action_dict["column"] = parts[1]
+    elif column:
+        action_dict["column"] = column
+
+    if method and action_type in ("fill_null", "normalize"):
+        action_dict["method"] = method
+    if constant_value and method == "constant":
+        action_dict["constant_value"] = constant_value
+    if old_value and action_type == "replace_substring":
+        action_dict["old_value"] = old_value
+    if new_value is not None and action_type == "replace_substring":
+        action_dict["new_value"] = new_value or ""
+    if target_type and action_type == "convert_type":
+        action_dict["target_type"] = target_type
+
+    try:
+        rows_before = len(_interactive_env._state.current_table)
+        obs, reward = _interactive_env.step(action_dict)
+        rows_after = len(_interactive_env._state.current_table)
+
+        from cleanflow_env.models.action import ActionModel
+        action_obj = ActionModel(**action_dict)
+        description = _describe_action(action_obj, rows_before, rows_after, _interactive_env._state)
+
+        step_num = len(_interactive_steps) + 1
+        _interactive_steps.append({
+            "Step": step_num,
+            "Action": action_type,
+            "Column": column or "—",
+            "Detail": description,
+            "Reward": round(reward.reward, 3),
+            "Budget Left": obs.budget_remaining,
+        })
+
+        steps_df = pd.DataFrame(_interactive_steps)
+        preview = _interactive_env._state.current_table.head(10).fillna("NULL").reset_index(drop=True)
+
+        if reward.done:
+            result = final_score(_interactive_env._state)
+            score_html = format_score_html(result)
+            status = f"**Episode complete!** Final score: **{result['score']:.3f}** in {step_num} steps."
+        else:
+            score_html = ""
+            remaining_nulls = sum(obs.null_counts.values())
+            status = (
+                f"Step {step_num}: {description}\n\n"
+                f"Budget: **{obs.budget_remaining}** | Nulls: **{remaining_nulls}** | Dups: **{obs.duplicate_count}**"
+            )
+
+        return steps_df, preview, score_html, status
+
+    except Exception as e:
+        return (
+            pd.DataFrame(_interactive_steps),
+            _interactive_env._state.current_table.head(10).fillna("NULL").reset_index(drop=True),
+            "",
+            f"**Action failed:** {e}",
+        )
+
+
+def _hitl_finish():
+    """Score the current episode without waiting for done=True."""
+    if _interactive_env is None or _interactive_env._state is None:
+        return "", "**Error:** No active episode."
+
+    result = final_score(_interactive_env._state)
+    score_html = format_score_html(result)
+    report = score_breakdown_report(_interactive_env._state)
+    return score_html, f"**Final grading complete.** Score: **{result['score']:.3f}**\n\n```\n{report}\n```"
+
+
+# ── LLM Benchmark ───────────────────────────────────────────────────────────
+
+
+def run_benchmark():
+    """Run the rule-based baseline and format results as a benchmark table."""
+    env = CleanFlowEnv(task_registry=TASK_REGISTRY)
+    agent = RuleBasedAgent()
+
+    rows = []
+    for task_id in ["task_easy", "task_medium", "task_hard", "task_expert", "task_multi"]:
+        obs = env.reset(task_id)
+        agent.reset()
+        done = False
+        steps = 0
+        while not done:
+            action = agent.act(obs)
+            if action is None:
+                break
+            obs, reward = env.step(action.model_dump())
+            done = reward.done
+            steps += 1
+
+        result = final_score(env._state)
+        budget_used = env._state.initial_budget - env._state.budget_remaining
+        rows.append({
+            "Task": TASK_LABELS[task_id],
+            "Agent": "Rule-Based Baseline",
+            "Score": round(result["score"], 3),
+            "Quality": round(result["quality_overall"], 3),
+            "Validation": round(result["validation"], 3),
+            "Efficiency": round(result["efficiency"], 3),
+            "Steps": steps,
+            "Budget": f"{budget_used}/{env._state.initial_budget}",
+        })
+
+    df = pd.DataFrame(rows)
+    avg = df["Score"].mean()
+
+    summary = f"""
+    <div style="padding:16px;">
+        <div style="display:flex; gap:32px; flex-wrap:wrap; justify-content:center;">
+            <div style="text-align:center;">
+                <div style="font-size:14px; color:#888;">Rule-Based Baseline</div>
+                <div style="font-size:48px; font-weight:bold; color:#22c55e;">{avg:.3f}</div>
+                <div style="font-size:12px; color:#888;">Average Score</div>
+            </div>
+            <div style="text-align:center;">
+                <div style="font-size:14px; color:#888;">Your LLM Agent</div>
+                <div style="font-size:48px; font-weight:bold; color:#888;">—</div>
+                <div style="font-size:12px; color:#888;">Connect via MCP or API</div>
+            </div>
+        </div>
+        <div style="text-align:center; margin-top:16px; color:#888; font-size:13px;">
+            Connect your LLM agent via the MCP endpoint (<code>/mcp</code>) or REST API to see its scores here.
+            <br>The baseline uses zero LLM calls — it's a pure rule-based agent for comparison.
+        </div>
+    </div>
+    """
+    return df, summary
+
+
 def create_dashboard() -> gr.Blocks:
     """Create the Gradio Blocks dashboard."""
 
@@ -828,7 +1031,156 @@ def create_dashboard() -> gr.Blocks:
                     outputs=[benchmark_table, benchmark_summary],
                 )
 
-            # --- Tab 3: Custom Dataset ---
+            # --- Tab 3: Interactive Mode (Human-in-the-Loop) ---
+            with gr.Tab("Interactive Mode"):
+
+                gr.Markdown(
+                    """
+                    ### Human-in-the-Loop Cleaning
+                    **You** are the agent! Pick actions manually and see their effects in real time.
+                    Can you beat the baseline score?
+                    """
+                )
+
+                with gr.Row():
+                    hitl_task = gr.Dropdown(
+                        choices=[
+                            ("Task 1 — Basic Cleaning (Easy)", "task_easy"),
+                            ("Task 2 — Schema Normalization (Medium)", "task_medium"),
+                            ("Task 3 — Advanced Cleaning (Hard)", "task_hard"),
+                            ("Task 4 — Budget-Constrained (Expert)", "task_expert"),
+                            ("Task 5 — Multi-Table Cleaning (Expert+)", "task_multi"),
+                        ],
+                        value="task_easy",
+                        label="Select Task",
+                        scale=2,
+                    )
+                    hitl_reset_btn = gr.Button("Reset", variant="primary", scale=1)
+
+                hitl_status_md = gr.Markdown("")
+                hitl_stats_html = gr.HTML()
+
+                gr.Markdown("#### Column Hints")
+                hitl_hints = gr.Markdown("")
+
+                gr.Markdown("---")
+                gr.Markdown("### Apply Action")
+
+                with gr.Row():
+                    hitl_action = gr.Dropdown(
+                        choices=[
+                            "fill_null", "drop_duplicates", "strip_whitespace",
+                            "replace_substring", "convert_type", "map_values",
+                            "normalize", "remove_outliers",
+                        ],
+                        value="fill_null",
+                        label="Action Type",
+                        scale=1,
+                    )
+                    hitl_column = gr.Dropdown(
+                        choices=[],
+                        label="Column",
+                        scale=1,
+                    )
+
+                with gr.Row():
+                    hitl_method = gr.Dropdown(
+                        choices=["mean", "median", "mode", "constant", "forward_fill", "backward_fill", "sequential"],
+                        value="median",
+                        label="Method (fill_null / normalize)",
+                        scale=1,
+                    )
+                    hitl_constant = gr.Textbox(label="Constant Value", scale=1)
+                    hitl_target_type = gr.Dropdown(
+                        choices=["int", "float", "datetime", "string"],
+                        label="Target Type (convert_type)",
+                        scale=1,
+                    )
+
+                with gr.Row():
+                    hitl_old_value = gr.Textbox(label="Old Value (replace_substring)", scale=1)
+                    hitl_new_value = gr.Textbox(label="New Value (replace_substring)", scale=1)
+
+                with gr.Row():
+                    hitl_apply_btn = gr.Button("Apply Action", variant="primary", scale=1)
+                    hitl_finish_btn = gr.Button("Finish & Score", variant="secondary", scale=1)
+
+                hitl_score_html = gr.HTML()
+
+                gr.Markdown("### Action Log")
+                hitl_steps_table = gr.Dataframe(
+                    label="Your Actions",
+                    interactive=False,
+                    wrap=True,
+                )
+
+                gr.Markdown("### Data Preview (first 10 rows)")
+                hitl_preview = gr.Dataframe(
+                    label="Current Data",
+                    interactive=False,
+                    wrap=True,
+                )
+
+                hitl_reset_btn.click(
+                    fn=_hitl_reset,
+                    inputs=[hitl_task],
+                    outputs=[
+                        hitl_stats_html,
+                        hitl_preview,
+                        hitl_column,
+                        hitl_hints,
+                        hitl_steps_table,
+                        hitl_score_html,
+                        hitl_status_md,
+                    ],
+                )
+
+                hitl_apply_btn.click(
+                    fn=_hitl_step,
+                    inputs=[
+                        hitl_action, hitl_column, hitl_method, hitl_constant,
+                        hitl_old_value, hitl_new_value, hitl_target_type,
+                    ],
+                    outputs=[hitl_steps_table, hitl_preview, hitl_score_html, hitl_status_md],
+                )
+
+                hitl_finish_btn.click(
+                    fn=_hitl_finish,
+                    inputs=[],
+                    outputs=[hitl_score_html, hitl_status_md],
+                )
+
+            # --- Tab 4: LLM Benchmark ---
+            with gr.Tab("LLM Benchmark"):
+
+                gr.Markdown(
+                    """
+                    ### Agent Benchmark Comparison
+                    Run the rule-based baseline across all tasks to establish a reference score.
+                    Connect your own LLM agent via the **MCP endpoint** (`/mcp`) or **REST API** to compare.
+
+                    **How to connect your agent:**
+                    1. Point your MCP client at this Space's `/mcp` endpoint
+                    2. Use `reset_environment`, `apply_action`, `get_status`, `get_score` tools
+                    3. The agent can call `get_data_preview` to see the data at any time
+                    """
+                )
+
+                benchmark2_btn = gr.Button("Run Baseline Benchmark", variant="primary")
+                benchmark2_summary = gr.HTML()
+                benchmark2_table = gr.Dataframe(
+                    label="Benchmark Results",
+                    interactive=False,
+                    wrap=True,
+                )
+
+                benchmark2_btn.click(
+                    fn=run_benchmark,
+                    inputs=[],
+                    outputs=[benchmark2_table, benchmark2_summary],
+                )
+
+            # --- Tab 5: Custom Dataset ---
             with gr.Tab("Custom Dataset"):
 
                 gr.Markdown(
@@ -952,7 +1304,7 @@ def create_dashboard() -> gr.Blocks:
                     ],
                 )
 
-            # --- Tab 4: About ---
+            # --- Tab 6: About ---
             with gr.Tab("About"):
                 gr.Markdown(
                     """
@@ -1013,8 +1365,13 @@ def create_dashboard() -> gr.Blocks:
                     - `GET /tasks` — List available tasks (5 tasks including multi-table)
                     - `POST /baseline` — Run baseline agent
 
+                    ### MCP Integration
+                    CleanFlowEnv exposes cleaning tools via the **Model Context Protocol (MCP)**.
+                    Any MCP-compatible agent (Claude, GPT, etc.) can connect to `/mcp` and use
+                    `reset_environment`, `apply_action`, `get_status`, `get_score`, and `get_data_preview`.
+
                     ### Tech Stack
-                    Python 3.10+ · FastAPI · Pydantic v2 · Pandas · NumPy · Gradio
+                    Python 3.10+ · FastAPI · Pydantic v2 · Pandas · NumPy · Gradio · FastMCP
                     """
                 )
 

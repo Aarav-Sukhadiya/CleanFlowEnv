@@ -126,9 +126,22 @@ def schema():
 
 
 @app.post("/mcp")
-def mcp():
-    """OpenEnv standard MCP endpoint (minimal stub)."""
-    return {"jsonrpc": "2.0", "result": {"tools": []}, "id": None}
+def mcp_endpoint():
+    """OpenEnv standard MCP endpoint — lists available MCP tools."""
+    return {
+        "jsonrpc": "2.0",
+        "result": {
+            "tools": [
+                {"name": "reset_environment", "description": "Reset environment and start a new cleaning episode"},
+                {"name": "apply_action", "description": "Apply a cleaning action to the dataset"},
+                {"name": "get_status", "description": "Get current null counts, duplicates, budget, schema"},
+                {"name": "get_score", "description": "Get the current grading score"},
+                {"name": "get_data_preview", "description": "Preview current data (first N rows)"},
+            ],
+            "mcp_endpoint": "/mcp/sse",
+        },
+        "id": None,
+    }
 
 
 # --- Core Endpoints ---
@@ -273,6 +286,12 @@ def baseline(_req: BaselineRequest = BaselineRequest()):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+# --- MCP Tool Server ---
+# Mounted at /mcp/sse — allows MCP-compatible LLM agents to interact
+from cleanflow_env.api.mcp_server import mcp as mcp_server
+
+app.mount("/mcp", mcp_server.http_app())
 
 # --- Gradio Dashboard ---
 # Mounted at /dashboard — the visual demo for judges
