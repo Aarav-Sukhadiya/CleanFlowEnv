@@ -21,12 +21,14 @@ from cleanflow_env.tasks.task_easy import generate_easy_task
 from cleanflow_env.tasks.task_expert import generate_expert_task
 from cleanflow_env.tasks.task_hard import generate_hard_task
 from cleanflow_env.tasks.task_medium import generate_medium_task
+from cleanflow_env.tasks.task_multi import generate_multi_task
 
 TASK_REGISTRY = {
     "task_easy": generate_easy_task,
     "task_medium": generate_medium_task,
     "task_hard": generate_hard_task,
     "task_expert": generate_expert_task,
+    "task_multi": generate_multi_task,
 }
 
 TASK_LABELS = {
@@ -34,6 +36,7 @@ TASK_LABELS = {
     "task_medium": "Task 2 — Schema Normalization (Medium)",
     "task_hard": "Task 3 — Advanced Cleaning (Hard)",
     "task_expert": "Task 4 — Budget-Constrained (Expert)",
+    "task_multi": "Task 5 — Multi-Table Cleaning (Expert+)",
 }
 
 TASK_DESCRIPTIONS = {
@@ -41,6 +44,7 @@ TASK_DESCRIPTIONS = {
     "task_medium": "Transaction records (300 rows). Issues: mixed date formats, currency strings, mixed booleans, trailing whitespace.",
     "task_hard": "Medical trial data (400 rows). Issues: outliers in blood_pressure/cholesterol, mixed patient_id formats, year typos.",
     "task_expert": "E-commerce catalog (500 rows). All issue types combined + 5 distractor columns. Tight budget of 15 credits.",
+    "task_multi": "Two linked tables: customers (100 rows) + orders (300 rows). Issues: orphan FKs, '$' in amounts, nulls, duplicates, whitespace. Budget: 25.",
 }
 
 
@@ -104,6 +108,17 @@ def _describe_action(action, rows_before: int, rows_after: int, env_state) -> st
         method = action.outlier_method or "iqr"
         return f"Removed {removed} outlier rows from {col} using {method.upper()} ({rows_before} -> {rows_after} rows)"
 
+    elif a == "validate_foreign_key":
+        table = getattr(action, "table", None) or ""
+        lookup = getattr(action, "lookup_table", None) or ""
+        removed = rows_before - rows_after
+        return f"Validated FK {table}.{col} -> {lookup} (removed {removed} orphan rows)"
+
+    elif a == "lookup_fill":
+        table = getattr(action, "table", None) or ""
+        lookup = getattr(action, "lookup_table", None) or ""
+        return f"Filled {col} in {table} via FK lookup from {lookup}"
+
     return f"{a} on {col}"
 
 
@@ -143,10 +158,24 @@ def run_episode_visual(task_id: str):
     obs = env.reset(task_id)
     agent = RuleBasedAgent()
 
+    is_multi = env._state.is_multi_table
+
     # Capture initial state
-    raw_df = env._state.raw_table.copy()
-    initial_nulls = sum(obs.null_counts.values())
-    initial_dups = obs.duplicate_count
+    if is_multi:
+        raw_df = env._state.current_table.copy()  # primary table
+        raw_tables = {name: df.copy() for name, df in env._state.tables.items()}
+        # Sum nulls/dups across all tables
+        initial_nulls = 0
+        initial_dups = 0
+        for t_obs in obs.tables.values():
+            initial_nulls += sum(t_obs.null_counts.values())
+            initial_dups += t_obs.duplicate_count
+    else:
+        raw_df = env._state.raw_table.copy()
+        raw_tables = None
+        initial_nulls = sum(obs.null_counts.values())
+        initial_dups = obs.duplicate_count
+
     initial_budget = obs.budget_remaining
 
     # Step log
@@ -170,10 +199,14 @@ def run_episode_visual(task_id: str):
 
         description = _describe_action(action, rows_before, rows_after, env._state)
 
+        table_col = action.column or "—"
+        if is_multi and getattr(action, "table", None):
+            table_col = f"{action.table}.{action.column}" if action.column else action.table
+
         steps_log.append({
             "Step": step_num,
             "Action": action.action_type,
-            "Column": action.column or "—",
+            "Column": table_col,
             "Detail": description,
             "Reward": round(reward.reward, 3),
             "Quality": round(reward.cumulative_quality, 3),
@@ -189,6 +222,13 @@ def run_episode_visual(task_id: str):
     gt_df = env._state.ground_truth.copy()
     report = score_breakdown_report(env._state)
 
+    # For multi-table, also capture all cleaned/GT tables
+    cleaned_tables = None
+    gt_tables = None
+    if is_multi:
+        cleaned_tables = {name: df.copy() for name, df in env._state.tables.items()}
+        gt_tables = {name: df.copy() for name, df in env._state.ground_truth_tables.items()}
+
     return (
         raw_df,
         cleaned_df,
@@ -201,6 +241,10 @@ def run_episode_visual(task_id: str):
         initial_dups,
         initial_budget,
         report,
+        is_multi,
+        raw_tables,
+        cleaned_tables,
+        gt_tables,
     )
 
 
@@ -293,12 +337,37 @@ def run_and_display(task_id: str):
         initial_dups,
         initial_budget,
         report,
+        is_multi,
+        raw_tables,
+        cleaned_tables,
+        gt_tables,
     ) = run_episode_visual(task_id)
 
     # DataFrames for display (limit to first 15 rows for readability)
-    raw_display = raw_df.head(15).fillna("NULL").reset_index(drop=True)
-    cleaned_display = cleaned_df.head(15).fillna("NULL").reset_index(drop=True)
-    gt_display = gt_df.head(15).fillna("NULL").reset_index(drop=True)
+    if is_multi and raw_tables:
+        # Combine tables with a "table" label column for display
+        raw_parts = []
+        cleaned_parts = []
+        gt_parts = []
+        for name in raw_tables:
+            rt = raw_tables[name].head(10).copy()
+            rt.insert(0, "_table", name)
+            raw_parts.append(rt)
+        for name in cleaned_tables:
+            ct = cleaned_tables[name].head(10).copy()
+            ct.insert(0, "_table", name)
+            cleaned_parts.append(ct)
+        for name in gt_tables:
+            gt = gt_tables[name].head(10).copy()
+            gt.insert(0, "_table", name)
+            gt_parts.append(gt)
+        raw_display = pd.concat(raw_parts, ignore_index=True).fillna("NULL")
+        cleaned_display = pd.concat(cleaned_parts, ignore_index=True).fillna("NULL")
+        gt_display = pd.concat(gt_parts, ignore_index=True).fillna("NULL")
+    else:
+        raw_display = raw_df.head(15).fillna("NULL").reset_index(drop=True)
+        cleaned_display = cleaned_df.head(15).fillna("NULL").reset_index(drop=True)
+        gt_display = gt_df.head(15).fillna("NULL").reset_index(drop=True)
 
     # Steps log as DataFrame
     steps_df = pd.DataFrame(steps_log) if steps_log else pd.DataFrame(
@@ -329,6 +398,11 @@ def run_and_display(task_id: str):
 
     summary_lines = [
         f"**{TASK_LABELS[task_id]}**\n",
+    ]
+    if is_multi:
+        table_names = ", ".join(raw_tables.keys())
+        summary_lines.append(f"Tables: **{table_names}**\n")
+    summary_lines += [
         f"Steps taken: **{len(steps_log)}** | "
         f"Budget used: **{initial_budget - (steps_log[-1]['Budget Left'] if steps_log else initial_budget)}** / {initial_budget} | "
         f"Final score: **{result['score']:.3f}**\n",
@@ -338,7 +412,13 @@ def run_and_display(task_id: str):
     for s in steps_log:
         summary_lines.append(f"- Step {s['Step']}: {s['Detail']}")
 
-    if rows_changed > 0:
+    if is_multi and cleaned_tables:
+        summary_lines.append("\n**Table Sizes (after cleaning):**")
+        for name, df in cleaned_tables.items():
+            orig_rows = len(raw_tables[name])
+            final = len(df)
+            summary_lines.append(f"- {name}: {orig_rows} -> {final} rows")
+    elif rows_changed > 0:
         summary_lines.append(f"\n**Rows:** {len(raw_df)} -> {final_rows} ({rows_changed} removed by dedup/outlier removal)")
     else:
         summary_lines.append(f"\n**Rows:** {len(raw_df)} (no rows removed)")
@@ -351,10 +431,11 @@ def run_and_display(task_id: str):
         for v in violations:
             summary_lines.append(f"- {v}")
 
-    # Distribution comparison
-    dist_comp = _distribution_comparison(raw_df, cleaned_df)
-    if dist_comp:
-        summary_lines.append(dist_comp)
+    # Distribution comparison (only for single-table)
+    if not is_multi:
+        dist_comp = _distribution_comparison(raw_df, cleaned_df)
+        if dist_comp:
+            summary_lines.append(dist_comp)
 
     summary = "\n".join(summary_lines)
 
@@ -373,12 +454,12 @@ def run_and_display(task_id: str):
 
 
 def run_all_tasks():
-    """Run baseline on all 4 tasks and return summary."""
+    """Run baseline on all tasks and return summary."""
     env = CleanFlowEnv(task_registry=TASK_REGISTRY)
     agent = RuleBasedAgent()
 
     rows = []
-    for task_id in ["task_easy", "task_medium", "task_hard", "task_expert"]:
+    for task_id in ["task_easy", "task_medium", "task_hard", "task_expert", "task_multi"]:
         obs = env.reset(task_id)
         agent.reset()
         done = False
@@ -640,6 +721,7 @@ def create_dashboard() -> gr.Blocks:
                             ("Task 2 — Schema Normalization (Medium)", "task_medium"),
                             ("Task 3 — Advanced Cleaning (Hard)", "task_hard"),
                             ("Task 4 — Budget-Constrained (Expert)", "task_expert"),
+                            ("Task 5 — Multi-Table Cleaning (Expert+)", "task_multi"),
                         ],
                         value="task_easy",
                         label="Select Task",
@@ -727,8 +809,8 @@ def create_dashboard() -> gr.Blocks:
 
                 gr.Markdown(
                     """
-                    ### Run Baseline Agent on All 4 Tasks
-                    Click below to run the rule-based agent across all difficulty levels and see comparative scores.
+                    ### Run Baseline Agent on All 5 Tasks
+                    Click below to run the rule-based agent across all difficulty levels (including multi-table) and see comparative scores.
                     """
                 )
 
@@ -894,6 +976,7 @@ def create_dashboard() -> gr.Blocks:
                     | **Semantic Hints** | Column descriptions force genuine NLP reasoning, not just pattern matching |
                     | **Deterministic Grading** | Fixed IQR x 1.5 rule, seeded data generation, fully reproducible |
                     | **Gap-Aware Sequential Fill** | Detects ID patterns (e.g. Employee_001) and fills gaps before extending past max |
+                    | **Multi-Table Support** | Cross-table tasks with FK relationships, orphan detection, and FK integrity scoring |
 
                     ### Action Types
 
@@ -906,6 +989,8 @@ def create_dashboard() -> gr.Blocks:
                     | `convert_type` | 2 | Convert column dtype (int/float/datetime/string) |
                     | `map_values` | 2 | Map categorical values (e.g. "yes"/"no" → True/False) |
                     | `normalize` | 2 | Scale column values (minmax/zscore) |
+                    | `validate_foreign_key` | 2 | Remove rows with orphan FK references |
+                    | `lookup_fill` | 2 | Fill nulls via FK lookup from another table |
                     | `remove_outliers` | 3 | Remove outliers using IQR x 1.5 rule |
 
                     ### Scoring Formula
@@ -924,7 +1009,8 @@ def create_dashboard() -> gr.Blocks:
                     - `POST /step` — Apply an action
                     - `GET /state` — Get current state
                     - `GET /grader` — Get final score
-                    - `GET /tasks` — List available tasks
+                    - `POST /grade/{task_id}` — Stateless per-task grading
+                    - `GET /tasks` — List available tasks (5 tasks including multi-table)
                     - `POST /baseline` — Run baseline agent
 
                     ### Tech Stack
