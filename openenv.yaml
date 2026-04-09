@@ -32,6 +32,9 @@ endpoints:
   grader:
     path: /grader
     method: GET
+  grade:
+    path: /grade/{task_id}
+    method: POST
   baseline:
     path: /baseline
     method: POST

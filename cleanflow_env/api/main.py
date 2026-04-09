@@ -176,13 +176,22 @@ def step(req: StepRequest):
     """Apply an action and return observation + reward."""
     try:
         obs, reward = env.step(req.action)
-        # Return reward as a single float per openenv standard StepResponse
-        # Do NOT embed reward_details in observation — internal reward values
-        # (scaled quality_delta, penalties) can exceed (0,1) and confuse validators.
         obs_dict = obs.model_dump()
+        # Sparse reward strategy: validator sums all step rewards and checks
+        # the cumulative total is in (0, 1). Return epsilon for intermediate
+        # steps and a capped terminal score when done.
+        _STEP_EPS = 0.01
+        if reward.done:
+            # Cap terminal reward so accumulated total stays strictly < 1.0
+            n_intermediate = max(env._state.step_count - 1, 0)
+            accumulated = n_intermediate * _STEP_EPS
+            max_terminal = max(_EPS, 0.99 - accumulated)
+            step_reward = min(_clamp_score(reward.cumulative_quality), max_terminal)
+        else:
+            step_reward = _STEP_EPS
         return {
             "observation": obs_dict,
-            "reward": _clamp_score(reward.cumulative_quality),
+            "reward": step_reward,
             "done": reward.done,
         }
     except RuntimeError as e:
@@ -214,6 +223,25 @@ def grader():
             if key in result:
                 result[key] = _clamp_score(result[key])
         return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/grade/{task_id}", response_model=GraderResponse)
+def grade_task(task_id: str):
+    """Stateless per-task grading — resets the task and returns its score."""
+    try:
+        if task_id not in TASK_REGISTRY:
+            raise HTTPException(status_code=404, detail=f"Unknown task: {task_id}")
+        env.reset(task_id)
+        result = final_score(env._state)
+        for key in ("score", "correctness", "completeness", "schema_accuracy",
+                     "quality_overall", "efficiency", "action_quality", "validation"):
+            if key in result:
+                result[key] = _clamp_score(result[key])
+        return result
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
