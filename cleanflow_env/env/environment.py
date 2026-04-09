@@ -315,6 +315,83 @@ class CleanFlowEnv:
 
         return build_observation(state), reward
 
+    def preview_action(self, action_dict: dict) -> Dict[str, Any]:
+        """Dry-run an action and return what would change, without spending budget.
+
+        Returns a dict with before/after stats so the agent can decide whether
+        to commit the action.
+        """
+        if self._state is None:
+            raise RuntimeError("Call reset() before preview_action().")
+
+        state = self._state
+
+        try:
+            action = ActionModel(**action_dict)
+        except Exception as e:
+            return {"valid": False, "error": str(e)}
+
+        cost = get_action_cost(action)
+        if cost > state.budget_remaining:
+            return {"valid": False, "error": "Insufficient budget", "cost": cost}
+
+        # Snapshot
+        before_df = state.current_table
+        before_tables = state.tables if state.is_multi_table else None
+
+        try:
+            result = apply_action(before_df, action, tables=before_tables)
+            if isinstance(result, dict):
+                after_df = result.get(state.primary_table, before_df)
+            else:
+                after_df = result
+        except InvalidActionError as e:
+            return {"valid": False, "error": str(e)}
+
+        # Compute diff stats
+        before_nulls = int(before_df.isnull().sum().sum())
+        after_nulls = int(after_df.isnull().sum().sum())
+        before_rows = len(before_df)
+        after_rows = len(after_df)
+        before_dups = int(before_df.duplicated().sum())
+        after_dups = int(after_df.duplicated().sum())
+
+        return {
+            "valid": True,
+            "cost": cost,
+            "rows_before": before_rows,
+            "rows_after": after_rows,
+            "rows_removed": before_rows - after_rows,
+            "nulls_before": before_nulls,
+            "nulls_after": after_nulls,
+            "nulls_fixed": before_nulls - after_nulls,
+            "duplicates_before": before_dups,
+            "duplicates_after": after_dups,
+        }
+
+    def undo(self) -> Optional[ObservationModel]:
+        """Revert the last action. Restores data but does NOT refund budget.
+
+        Returns the new observation, or None if nothing to undo.
+        """
+        if self._state is None:
+            return None
+
+        state = self._state
+        if state.step_count == 0 or state.prev_table is None:
+            return None
+
+        # Revert data
+        state.current_table = state.prev_table.copy()
+        if state.is_multi_table and state.prev_tables:
+            state.tables = {k: v.copy() for k, v in state.prev_tables.items()}
+
+        # Mark the last operation as undone
+        if state.operations_history:
+            state.operations_history[-1]["undone"] = True
+
+        return build_observation(state)
+
     def state(self) -> Dict[str, Any]:
         """Return the current internal state as a serializable dict."""
         if self._state is None:

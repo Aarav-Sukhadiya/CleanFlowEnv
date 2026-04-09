@@ -46,8 +46,10 @@ Available action types and their required fields:
 1. fill_null — Fill missing values in a column (cost: 1)
    Required: action_type, column, method
    method options: "mean", "median", "mode", "constant", "forward_fill", "backward_fill", "sequential"
-   If method is "constant", also provide "constant_value".
+   If method is "constant", also provide "constant_value" (e.g. "Unknown", "pending").
    Use "sequential" for ID columns with a prefix+number pattern (e.g. Employee_001).
+   Use "forward_fill" for date/time columns.
+   Use "mode" for categorical columns (or "constant" if the description says so).
 
 2. drop_duplicates — Remove duplicate rows (cost: 1)
    Required: action_type (no column needed)
@@ -70,14 +72,27 @@ Available action types and their required fields:
 7. normalize — Normalize a numeric column (cost: 2)
    Required: action_type, column (uses min-max normalization)
 
-8. remove_outliers — Remove outlier rows using IQR x 1.5 (cost: 3)
+8. standardize_format — Standardize mixed-format ID columns to consistent prefix+number (cost: 2)
+   Required: action_type, column
+   Use when an ID column has mixed formats (e.g. "P001", "1", "001" all become "P001").
+
+9. remove_outliers — Remove outlier rows using IQR x 1.5 (cost: 3)
    Required: action_type, column
 
+10. validate_foreign_key — Remove rows with orphan FK references (cost: 2, multi-table only)
+    Required: action_type, column, table, foreign_key_column, lookup_table, lookup_key_column
+
+11. lookup_fill — Fill nulls via FK lookup from another table (cost: 2, multi-table only)
+    Required: action_type, column, table, foreign_key_column, lookup_table, lookup_key_column, lookup_value_column
+
+For multi-table tasks, add "table": "<table_name>" to target a specific table.
+
 Example actions:
-  {"action_type": "fill_null", "column": "age", "method": "mean"}
+  {"action_type": "fill_null", "column": "age", "method": "median"}
   {"action_type": "drop_duplicates"}
-  {"action_type": "strip_whitespace", "column": "country_code"}
+  {"action_type": "strip_whitespace", "column": "name"}
   {"action_type": "replace_substring", "column": "price", "old_value": "$", "new_value": ""}
+  {"action_type": "standardize_format", "column": "patient_id"}
   {"action_type": "map_values", "column": "is_active", "mapping": {"yes": true, "no": false}}
   {"action_type": "convert_type", "column": "price", "target_type": "float"}
   {"action_type": "remove_outliers", "column": "salary"}
@@ -87,7 +102,7 @@ Example actions:
 def build_prompt(obs: Dict[str, Any], action_history: List[Dict]) -> str:
     """Build the LLM prompt from the current observation."""
     null_info = {k: v for k, v in obs.get("null_counts", {}).items() if v > 0}
-    schema = obs.get("schema", {})
+    schema = obs.get("table_schema", obs.get("schema", {}))
     budget = obs.get("budget_remaining", "unknown")
     step = obs.get("step_count", 0)
     dupes = obs.get("duplicate_count", 0)
@@ -100,6 +115,21 @@ def build_prompt(obs: Dict[str, Any], action_history: List[Dict]) -> str:
         preview_str = f"Columns: {cols}\n"
         for row in preview_rows[:3]:
             preview_str += f"  Row {row.get('row_index', '?')}: {row.get('values', {})}\n"
+
+    # Multi-table info
+    tables_info = ""
+    tables_data = obs.get("tables")
+    relationships = obs.get("table_relationships")
+    if tables_data:
+        tables_info = "\nMulti-table mode — tables:\n"
+        for tname, tobs in tables_data.items():
+            t_nulls = {k: v for k, v in tobs.get("null_counts", {}).items() if v > 0}
+            t_dups = tobs.get("duplicate_count", 0)
+            tables_info += f"  {tname}: nulls={json.dumps(t_nulls) if t_nulls else 'none'}, duplicates={t_dups}\n"
+        if relationships:
+            tables_info += "  Relationships:\n"
+            for rel in relationships:
+                tables_info += f"    {rel['from_table']}.{rel['from_column']} → {rel['to_table']}.{rel['to_column']}\n"
 
     history_str = ""
     if action_history:
@@ -116,22 +146,35 @@ Current observation:
 - Columns with nulls: {json.dumps(null_info) if null_info else "none"}
 - Column types: {json.dumps(schema)}
 - Column descriptions: {json.dumps(col_desc, default=str)}
-
+{tables_info}
 Table preview (first 3 rows):
 {preview_str}
 {history_str}
 
-Strategy:
-1. First drop duplicates if any exist (cost 1)
-2. Fill nulls in columns that have missing values (cost 1 each)
-3. Strip whitespace on string columns that mention it (cost 1 each)
-4. Replace substrings like "$" or "," before type conversion (cost 1 each)
-5. Map categorical values where column descriptions mention boolean mapping (cost 2 each)
-6. Convert types where column descriptions suggest type mismatch (cost 2 each)
-7. Remove outliers in numeric columns if budget allows (cost 3 each)
-8. Stop when budget is low or all issues are fixed
+Strategy (follow this priority order):
+1. Drop duplicates if any exist (cost 1)
+2. Strip whitespace on string columns that mention "whitespace" in description (cost 1)
+3. Standardize mixed-format ID columns (e.g. patient_id with "P001", "1", "001") (cost 2)
+4. Replace substrings like "$", "," before type conversion (cost 1 each)
+5. Convert types where descriptions mention type mismatch (datetime, float) (cost 2)
+6. Replace year typos (e.g. "2033" → "2023") if mentioned in descriptions (cost 1)
+7. Fill nulls using the method suggested by column descriptions (cost 1):
+   - Sequential for ID columns with prefix+number pattern
+   - Constant for categorical columns (use the value from description, e.g. "Unknown", "pending")
+   - Forward fill for date/time columns
+   - Median for numeric columns (robust to outliers)
+8. Map categorical values to boolean where descriptions mention yes/no mapping (cost 2)
+9. Remove outliers in numeric columns if descriptions mention it (cost 3)
+10. Stop when budget is low or all issues are fixed
 
-Based on the observation above, decide the single best next action. If all issues are resolved or budget is too low for useful actions, return {{"action_type": "drop_duplicates"}} as a low-cost finishing move.
+IMPORTANT:
+- Read column descriptions carefully — they tell you exactly what cleaning each column needs.
+- Do NOT repeat actions you've already taken.
+- If a column description says "no cleaning needed" or "no action", skip it.
+- For multi-table tasks, validate foreign keys first, then clean each table.
+
+Based on the observation above, decide the single best next action.
+If all issues are resolved or budget is too low, return {{"action_type": "drop_duplicates"}} as a safe finishing move.
 
 Return ONLY a valid JSON object with the action. No explanation, no markdown."""
 
@@ -170,7 +213,7 @@ def log_start(task_id: str, obs: Dict[str, Any]) -> None:
         "null_counts": obs.get("null_counts", {}),
         "duplicate_count": obs.get("duplicate_count", 0),
         "budget_remaining": obs.get("budget_remaining", 0),
-        "columns": list(obs.get("schema", {}).keys()),
+        "columns": list(obs.get("table_schema", obs.get("schema", {})).keys()),
     }
     print(f"[START] {json.dumps(entry)}", flush=True)
 
@@ -233,6 +276,7 @@ def run_episode(task_id: str) -> Dict[str, Any]:
         valid_types = {
             "fill_null", "drop_duplicates", "convert_type", "normalize",
             "remove_outliers", "strip_whitespace", "map_values", "replace_substring",
+            "standardize_format", "validate_foreign_key", "lookup_fill",
         }
         if action.get("action_type") not in valid_types:
             print(f"  [{task_id}] Invalid action type: {action.get('action_type')}, stopping.", file=sys.stderr)
@@ -284,7 +328,7 @@ def main():
         tasks_resp.raise_for_status()
         task_list = [t["id"] for t in tasks_resp.json()["tasks"]]
     except Exception:
-        task_list = ["task_easy", "task_medium", "task_hard", "task_expert"]
+        task_list = ["task_easy", "task_medium", "task_hard", "task_expert", "task_multi", "task_messy_contacts"]
 
     results = {}
     scores = []

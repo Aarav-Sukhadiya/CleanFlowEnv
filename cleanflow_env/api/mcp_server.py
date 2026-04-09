@@ -17,6 +17,7 @@ from cleanflow_env.tasks.task_expert import generate_expert_task
 from cleanflow_env.tasks.task_hard import generate_hard_task
 from cleanflow_env.tasks.task_medium import generate_medium_task
 from cleanflow_env.tasks.task_multi import generate_multi_task
+from cleanflow_env.tasks.task_messy_contacts import generate_messy_contacts_task
 
 TASK_REGISTRY = {
     "task_easy": generate_easy_task,
@@ -24,6 +25,7 @@ TASK_REGISTRY = {
     "task_hard": generate_hard_task,
     "task_expert": generate_expert_task,
     "task_multi": generate_multi_task,
+    "task_messy_contacts": generate_messy_contacts_task,
 }
 
 mcp = FastMCP(
@@ -48,6 +50,7 @@ def list_tasks() -> str:
         ("task_hard", "Advanced Cleaning", "Hard — Medical trials, 400 rows, outliers + typos"),
         ("task_expert", "Budget-Constrained", "Expert — E-commerce, 500 rows, tight budget"),
         ("task_multi", "Multi-Table Cleaning", "Expert+ — Customers + Orders, FK relationships"),
+        ("task_messy_contacts", "Messy Contacts", "Medium-Hard — Contact directory, mixed phones + salary strings"),
     ]
     lines = ["Available Tasks:", ""]
     for tid, name, desc in tasks:
@@ -233,6 +236,72 @@ def get_score() -> Dict[str, Any]:
     # Remove validation_details to keep response clean
     result.pop("validation_details", None)
     return {k: round(v, 4) if isinstance(v, float) else v for k, v in result.items()}
+
+
+@mcp.tool()
+def preview_action(
+    action_type: str,
+    column: Optional[str] = None,
+    method: Optional[str] = None,
+    constant_value: Optional[str] = None,
+    old_value: Optional[str] = None,
+    new_value: Optional[str] = None,
+    target_type: Optional[str] = None,
+    table: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Dry-run an action and see what would change, without spending budget.
+
+    Returns before/after stats (rows, nulls, duplicates, cost) so you can
+    decide whether to commit the action.
+
+    Args:
+        action_type: The action to preview (same types as apply_action)
+        column: Target column name
+        method: Fill/normalize method
+        constant_value: Value for constant fill
+        old_value: Substring to find (replace_substring)
+        new_value: Replacement string (replace_substring)
+        target_type: Target dtype (convert_type)
+        table: Target table (multi-table tasks)
+    """
+    if _env._state is None:
+        return {"error": "No active episode. Call reset_environment first."}
+
+    action_dict: Dict[str, Any] = {"action_type": action_type}
+    for key, val in [("column", column), ("method", method),
+                     ("constant_value", constant_value), ("old_value", old_value),
+                     ("new_value", new_value), ("target_type", target_type),
+                     ("table", table)]:
+        if val is not None:
+            action_dict[key] = val
+
+    return _env.preview_action(action_dict)
+
+
+@mcp.tool()
+def undo_action() -> Dict[str, Any]:
+    """
+    Undo the last action, reverting the data to its previous state.
+
+    Budget is NOT refunded — only the data changes are reverted.
+    Returns the new observation after undoing.
+    """
+    if _env._state is None:
+        return {"error": "No active episode. Call reset_environment first."}
+
+    obs = _env.undo()
+    if obs is None:
+        return {"status": "nothing_to_undo", "message": "No previous state to revert to."}
+
+    obs_dict = obs.model_dump()
+    return {
+        "status": "undone",
+        "null_counts": obs_dict.get("null_counts", {}),
+        "duplicate_count": obs_dict.get("duplicate_count", 0),
+        "budget_remaining": obs_dict.get("budget_remaining", 0),
+        "step_count": obs_dict.get("step_count", 0),
+    }
 
 
 @mcp.tool()

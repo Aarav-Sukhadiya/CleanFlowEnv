@@ -25,11 +25,14 @@ Data cleaning accounts for **60-80% of real-world data work**, yet there are ver
 
 ## Key Features
 
-- **11 structured cleaning actions** — fill nulls, drop duplicates, strip whitespace, replace substrings, convert types, map categorical values, normalize columns, remove outliers, validate foreign keys, and lookup fill
-- **5 difficulty-tiered tasks** — from basic null-filling (Easy) to multi-table cross-FK cleaning (Expert+)
+- **11 structured cleaning actions** — fill nulls, drop duplicates, strip whitespace, replace substrings, convert types, map categorical values, normalize columns, remove outliers, standardize mixed-format IDs, validate foreign keys, and lookup fill
+- **6 difficulty-tiered tasks** — from basic null-filling (Easy) to multi-table cross-FK cleaning (Expert+), plus a messy contacts variant
+- **Action preview / dry-run** — preview what an action would change (rows, nulls, duplicates, cost) before committing budget
+- **Undo action** — revert the last action's data changes (budget is not refunded, preventing exploit loops)
+- **Data diff view** — see exactly what changed after each action (per-column null changes, row counts, sample value diffs)
 - **Custom dataset support** — upload any CSV and auto-generate a cleaning task with ground truth at easy/medium/hard difficulty
-- **MCP tool server** — expose all cleaning actions as MCP tools so any MCP-compatible LLM agent (Claude, GPT, etc.) can interact directly
-- **Human-in-the-loop mode** — interactive dashboard tab where you manually pick actions step by step and try to beat the baseline
+- **MCP tool server** — 7 MCP tools so any MCP-compatible LLM agent (Claude, GPT, etc.) can interact directly, including preview and undo
+- **Human-in-the-loop mode** — interactive dashboard tab with Preview, Apply, Undo, and Diff buttons for manual step-by-step cleaning
 - **LLM agent benchmark** — side-by-side comparison of baseline vs. your LLM agent scores across all tasks
 - **Interactive Gradio dashboard** — visual step-by-step demo at `/dashboard` with live table previews, quality progress tracking, and one-click baseline execution
 - **Exploit-resistant reward design** — high-water mark prevents apply-undo-apply oscillation; harmful and redundant actions are penalized
@@ -119,9 +122,10 @@ Termination conditions: max 20 steps, budget exhausted, or perfect quality (1.0)
 |---------|-----------|---------|------------|--------|---------------|
 | `task_easy` | Easy | Employee survey (200 rows, 5 cols) | Missing values, duplicates | 20 | ~0.94 |
 | `task_medium` | Medium | Transactions (300 rows, 6 cols) | Mixed date formats, currency strings `$1,234.56`, mixed booleans (yes/no/1/0/True/False) | 20 | ~0.92 |
-| `task_hard` | Hard | Medical trials (400 rows, 8 cols) | Outliers (IQR), mixed ID formats, year typos (2033→2023) | 20 | ~0.88 |
+| `task_hard` | Hard | Medical trials (400 rows, 8 cols) | Outliers (IQR), mixed ID formats, year typos (2033→2023) | 20 | ~0.92 |
 | `task_expert` | Expert | E-commerce catalog (500 rows, 10 cols) | All issues combined + 5 distractor columns that are already clean | 15 | ~0.88 |
-| `task_multi` | Expert+ | Customers (100 rows) + Orders (300 rows) | Two linked tables with FK relationships, orphan keys, `$` amounts, nulls, duplicates, whitespace | 25 | ~0.86 |
+| `task_multi` | Expert+ | Customers (100 rows) + Orders (300 rows) | Two linked tables with FK relationships, orphan keys, `$` amounts, nulls, duplicates, whitespace | 25 | ~0.88 |
+| `task_messy_contacts` | Medium-Hard | Contact directory (250 rows, 7 cols) | Whitespace in names, mixed phone formats, `$` salary strings, mixed date formats, nulls, duplicates | 20 | ~0.91 |
 | `task_custom` | Custom | User-uploaded CSV | Auto-detected issues with configurable difficulty (easy/medium/hard) | 20 | — |
 
 ## Interactive Dashboard
@@ -129,8 +133,8 @@ Termination conditions: max 20 steps, budget exhausted, or perfect quality (1.0)
 CleanFlowEnv includes a **Gradio-powered interactive dashboard** accessible at `/dashboard` that provides:
 
 - **Run Episode** — choose any built-in task and watch the baseline agent clean it step by step
-- **Baseline Benchmark** — run the agent on all 5 tasks and see comparative scores
-- **Interactive Mode** — human-in-the-loop cleaning where you pick actions manually
+- **Baseline Benchmark** — run the agent on all 6 tasks and see comparative scores
+- **Interactive Mode** — human-in-the-loop cleaning with Preview, Apply, Undo, Show Diff, and Finish buttons
 - **LLM Benchmark** — compare your LLM agent's scores against the rule-based baseline
 - **Custom Dataset** — upload a CSV and auto-generate a cleaning task
 - **Live metrics** — null counts, duplicate counts, quality progress, and budget usage
@@ -165,6 +169,8 @@ python simulate.py
 |--------|------|-------------|
 | `POST` | `/reset` | Start a new episode with a task |
 | `POST` | `/step` | Apply a cleaning action |
+| `POST` | `/preview` | Dry-run an action (returns before/after stats without spending budget) |
+| `POST` | `/undo` | Revert the last action (data only, budget not refunded) |
 | `GET` | `/state` | Get current internal state |
 | `GET` | `/grader` | Get final score after episode |
 | `GET` | `/tasks` | List available tasks and action schema |
@@ -204,32 +210,33 @@ curl -X POST http://localhost:7860/baseline
 
 ## Baseline Scores
 
-The rule-based baseline agent uses a deterministic 7-priority decision strategy (no LLM, no API keys):
+The rule-based baseline agent uses a deterministic priority-based decision strategy (no LLM, no API keys):
 
 | Task | Score | Steps | Budget Used |
 |------|-------|-------|-------------|
-| Task 1 (Easy) | ~0.94 | 7 | 8 / 20 |
-| Task 2 (Medium) | ~0.92 | 6 | 9 / 20 |
-| Task 3 (Hard) | ~0.90 | 5 | 11 / 20 |
-| Task 4 (Expert) | ~0.88 | 7 | 11 / 15 |
-| Task 5 (Multi-Table) | ~0.86 | 13 | 17 / 25 |
-| **Average** | **~0.89** | | |
+| Task 1 (Easy) | 0.940 | 7 | 8 / 20 |
+| Task 2 (Medium) | 0.916 | 6 | 9 / 20 |
+| Task 3 (Hard) | 0.917 | 5 | 11 / 20 |
+| Task 4 (Expert) | 0.876 | 7 | 11 / 15 |
+| Task 5 (Multi-Table) | 0.881 | 13 | 17 / 25 |
+| Task 6 (Messy Contacts) | 0.905 | 9 | 11 / 20 |
+| **Average** | **0.906** | | |
 
 ## Project Structure
 
 ```
 cleanflow_env/
 ├── api/
-│   ├── main.py              # FastAPI endpoints (reset, step, state, grader, tasks, baseline)
+│   ├── main.py              # FastAPI endpoints (reset, step, preview, undo, state, grader, tasks, baseline)
 │   ├── dashboard.py          # Gradio interactive dashboard (6 tabs, mounted at /dashboard)
-│   └── mcp_server.py         # MCP tool server (5 tools for LLM agent integration)
+│   └── mcp_server.py         # MCP tool server (7 tools for LLM agent integration)
 ├── baseline/
 │   ├── rule_agent.py         # Rule-based deterministic agent (7-priority strategy)
 │   └── run_baseline.py       # Baseline episode runner
 ├── env/
-│   ├── actions.py            # 10 cleaning functions + O(1) dispatcher
+│   ├── actions.py            # 11 cleaning functions + O(1) dispatcher
 │   ├── budget.py             # Budget cost table per action type
-│   ├── environment.py        # CleanFlowEnv core (reset/step/state)
+│   ├── environment.py        # CleanFlowEnv core (reset/step/preview/undo/state)
 │   ├── grader.py             # Final 5-component scoring
 │   ├── rewards.py            # Per-step quality + reward computation
 │   ├── state.py              # EnvironmentState dataclass
@@ -244,6 +251,7 @@ cleanflow_env/
 │   ├── task_hard.py          # Advanced cleaning (400 rows, 8 cols)
 │   ├── task_expert.py        # Budget-constrained (500 rows, 10 cols)
 │   ├── task_multi.py         # Multi-table cleaning (customers + orders, FK relationships)
+│   ├── task_messy_contacts.py # Messy contacts (250 rows, mixed phones, $ salaries, whitespace)
 │   └── task_custom.py        # Custom CSV task generator with auto ground truth
 tests/
 ├── test_actions.py           # Unit tests for all 8 cleaning functions
@@ -282,9 +290,9 @@ Correctness is measured by comparing sorted column values rather than row-aligne
 
 ## Future Extensions
 
-- Undo/redo actions with exploration-friendly reward shaping
 - Streaming data cleaning (mini-batch episodes)
 - Noisy real-world datasets from public data portals
 - Column-level difficulty scoring based on issue density
 - Auto-generated task variants with configurable issue mixes
 - Persistent leaderboard integration via HF Spaces
+- Multi-agent collaboration on shared datasets

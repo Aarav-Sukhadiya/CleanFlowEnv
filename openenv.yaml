@@ -35,6 +35,12 @@ endpoints:
   grade:
     path: /grade/{task_id}
     method: POST
+  preview:
+    path: /preview
+    method: POST
+  undo:
+    path: /undo
+    method: POST
   baseline:
     path: /baseline
     method: POST
@@ -57,7 +63,7 @@ tasks:
     difficulty: hard
     description: "Remove outliers, normalize IDs, and fix date typos in medical trial records (400 rows, 8 columns)."
     budget: 20
-    expected_baseline_score: 0.88
+    expected_baseline_score: 0.92
   - id: task_expert
     name: Budget-Constrained Cleaning
     difficulty: expert
@@ -69,7 +75,13 @@ tasks:
     difficulty: expert+
     description: "Two linked tables (customers 100 rows, orders 300 rows) with FK relationships, orphan keys, mixed formats, and cross-table issues."
     budget: 25
-    expected_baseline_score: 0.85
+    expected_baseline_score: 0.88
+  - id: task_messy_contacts
+    name: Messy Contacts
+    difficulty: medium-hard
+    description: "Contact directory (250 rows, 7 cols) with whitespace in names, mixed phone formats, salary as currency strings, mixed date formats, nulls, and duplicates."
+    budget: 20
+    expected_baseline_score: 0.91
 
 score_range:
   min: 0.0001

@@ -32,6 +32,7 @@ from cleanflow_env.tasks.task_expert import generate_expert_task
 from cleanflow_env.tasks.task_hard import generate_hard_task
 from cleanflow_env.tasks.task_medium import generate_medium_task
 from cleanflow_env.tasks.task_multi import generate_multi_task
+from cleanflow_env.tasks.task_messy_contacts import generate_messy_contacts_task
 
 # --- Task Registry ---
 TASK_REGISTRY = {
@@ -40,6 +41,7 @@ TASK_REGISTRY = {
     "task_hard": generate_hard_task,
     "task_expert": generate_expert_task,
     "task_multi": generate_multi_task,
+    "task_messy_contacts": generate_messy_contacts_task,
 }
 
 # Global environment instance — initialized eagerly
@@ -134,6 +136,8 @@ def mcp_endpoint():
             "tools": [
                 {"name": "reset_environment", "description": "Reset environment and start a new cleaning episode"},
                 {"name": "apply_action", "description": "Apply a cleaning action to the dataset"},
+                {"name": "preview_action", "description": "Dry-run an action to see what would change without spending budget"},
+                {"name": "undo_action", "description": "Revert the last action (data only, budget not refunded)"},
                 {"name": "get_status", "description": "Get current null counts, duplicates, budget, schema"},
                 {"name": "get_score", "description": "Get the current grading score"},
                 {"name": "get_data_preview", "description": "Preview current data (first N rows)"},
@@ -215,6 +219,30 @@ def step(req: StepRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/preview")
+def preview(req: StepRequest):
+    """Dry-run an action and return what would change, without spending budget."""
+    try:
+        result = env.preview_action(req.action)
+        return result
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/undo")
+def undo():
+    """Revert the last action. Restores data but does NOT refund budget."""
+    try:
+        obs = env.undo()
+        if obs is None:
+            return {"status": "nothing_to_undo"}
+        return {"status": "undone", "observation": obs.model_dump()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/state")
 def state():
     """Return current internal state."""
@@ -270,6 +298,7 @@ def tasks():
         TaskInfo(id="task_hard", name="Advanced Cleaning", difficulty="hard"),
         TaskInfo(id="task_expert", name="Budget-Constrained Cleaning", difficulty="expert"),
         TaskInfo(id="task_multi", name="Multi-Table Cleaning", difficulty="expert+"),
+        TaskInfo(id="task_messy_contacts", name="Messy Contacts", difficulty="medium-hard"),
     ]
     return TasksResponse(
         tasks=task_info,

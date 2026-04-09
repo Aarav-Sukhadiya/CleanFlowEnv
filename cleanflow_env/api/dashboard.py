@@ -22,6 +22,7 @@ from cleanflow_env.tasks.task_expert import generate_expert_task
 from cleanflow_env.tasks.task_hard import generate_hard_task
 from cleanflow_env.tasks.task_medium import generate_medium_task
 from cleanflow_env.tasks.task_multi import generate_multi_task
+from cleanflow_env.tasks.task_messy_contacts import generate_messy_contacts_task
 
 TASK_REGISTRY = {
     "task_easy": generate_easy_task,
@@ -29,6 +30,7 @@ TASK_REGISTRY = {
     "task_hard": generate_hard_task,
     "task_expert": generate_expert_task,
     "task_multi": generate_multi_task,
+    "task_messy_contacts": generate_messy_contacts_task,
 }
 
 TASK_LABELS = {
@@ -37,6 +39,7 @@ TASK_LABELS = {
     "task_hard": "Task 3 — Advanced Cleaning (Hard)",
     "task_expert": "Task 4 — Budget-Constrained (Expert)",
     "task_multi": "Task 5 — Multi-Table Cleaning (Expert+)",
+    "task_messy_contacts": "Task 6 — Messy Contacts (Medium-Hard)",
 }
 
 TASK_DESCRIPTIONS = {
@@ -45,6 +48,7 @@ TASK_DESCRIPTIONS = {
     "task_hard": "Medical trial data (400 rows). Issues: outliers in blood_pressure/cholesterol, mixed patient_id formats, year typos.",
     "task_expert": "E-commerce catalog (500 rows). All issue types combined + 5 distractor columns. Tight budget of 15 credits.",
     "task_multi": "Two linked tables: customers (100 rows) + orders (300 rows). Issues: orphan FKs, '$' in amounts, nulls, duplicates, whitespace. Budget: 25.",
+    "task_messy_contacts": "Contact directory (250 rows). Issues: whitespace in names, mixed phone formats, salary as '$' strings, mixed date formats, nulls, duplicates.",
 }
 
 
@@ -462,7 +466,7 @@ def run_all_tasks():
     agent = RuleBasedAgent()
 
     rows = []
-    for task_id in ["task_easy", "task_medium", "task_hard", "task_expert", "task_multi"]:
+    for task_id in ["task_easy", "task_medium", "task_hard", "task_expert", "task_multi", "task_messy_contacts"]:
         obs = env.reset(task_id)
         agent.reset()
         done = False
@@ -826,6 +830,142 @@ def _hitl_step(action_type, column, method, constant_value, old_value, new_value
         )
 
 
+def _hitl_preview(action_type, column, method, constant_value, old_value, new_value, target_type):
+    """Dry-run an action and show what would change."""
+    if _interactive_env is None or _interactive_env._state is None:
+        return "**Error:** No active episode. Click Reset first."
+
+    action_dict: Dict[str, Any] = {"action_type": action_type}
+    if column and "." in column:
+        parts = column.split(".", 1)
+        action_dict["table"] = parts[0]
+        action_dict["column"] = parts[1]
+    elif column:
+        action_dict["column"] = column
+    if method and action_type in ("fill_null", "normalize"):
+        action_dict["method"] = method
+    if constant_value and method == "constant":
+        action_dict["constant_value"] = constant_value
+    if old_value and action_type == "replace_substring":
+        action_dict["old_value"] = old_value
+    if new_value is not None and action_type == "replace_substring":
+        action_dict["new_value"] = new_value or ""
+    if target_type and action_type == "convert_type":
+        action_dict["target_type"] = target_type
+
+    result = _interactive_env.preview_action(action_dict)
+    if not result.get("valid", False):
+        return f"**Preview failed:** {result.get('error', 'Unknown error')}"
+
+    lines = [
+        f"**Preview** — cost: **{result['cost']}** budget",
+        f"- Rows: {result['rows_before']} → {result['rows_after']} ({result['rows_removed']} removed)",
+        f"- Nulls: {result['nulls_before']} → {result['nulls_after']} ({result['nulls_fixed']} fixed)",
+        f"- Duplicates: {result['duplicates_before']} → {result['duplicates_after']}",
+    ]
+    return "\n".join(lines)
+
+
+def _hitl_undo():
+    """Undo the last action."""
+    global _interactive_steps
+    if _interactive_env is None or _interactive_env._state is None:
+        return (
+            pd.DataFrame(),
+            pd.DataFrame(),
+            "",
+            "**Error:** No active episode. Click Reset first.",
+        )
+
+    obs = _interactive_env.undo()
+    if obs is None:
+        return (
+            pd.DataFrame(_interactive_steps),
+            _interactive_env._state.current_table.head(10).fillna("NULL").reset_index(drop=True),
+            "",
+            "**Nothing to undo.**",
+        )
+
+    # Mark last step as undone in the log
+    if _interactive_steps:
+        _interactive_steps[-1]["Action"] += " (UNDONE)"
+
+    steps_df = pd.DataFrame(_interactive_steps)
+    preview = _interactive_env._state.current_table.head(10).fillna("NULL").reset_index(drop=True)
+    remaining_nulls = sum(obs.null_counts.values())
+
+    status = (
+        f"**Undone!** Last action reverted (budget not refunded).\n\n"
+        f"Budget: **{obs.budget_remaining}** | Nulls: **{remaining_nulls}** | Dups: **{obs.duplicate_count}**"
+    )
+
+    return steps_df, preview, "", status
+
+
+def _hitl_diff():
+    """Show a before/after diff of the last action."""
+    if _interactive_env is None or _interactive_env._state is None:
+        return "**Error:** No active episode."
+
+    state = _interactive_env._state
+    if state.prev_table is None or state.step_count == 0:
+        return "**No changes yet.** Apply an action first to see the diff."
+
+    prev = state.prev_table
+    cur = state.current_table
+
+    lines = ["### Data Diff (last action)"]
+
+    # Row count change
+    if len(prev) != len(cur):
+        lines.append(f"- **Rows:** {len(prev)} → {len(cur)} ({len(cur) - len(prev):+d})")
+
+    # Per-column null changes
+    null_changes = []
+    for col in cur.columns:
+        prev_nulls = int(prev[col].isnull().sum()) if col in prev.columns else 0
+        cur_nulls = int(cur[col].isnull().sum())
+        if prev_nulls != cur_nulls:
+            null_changes.append(f"  - **{col}**: {prev_nulls} → {cur_nulls} nulls")
+    if null_changes:
+        lines.append("- **Null changes:**")
+        lines.extend(null_changes)
+
+    # Duplicate change
+    prev_dups = int(prev.duplicated().sum())
+    cur_dups = int(cur.duplicated().sum())
+    if prev_dups != cur_dups:
+        lines.append(f"- **Duplicates:** {prev_dups} → {cur_dups}")
+
+    # Value changes (sample up to 5 changed cells)
+    if len(prev) == len(cur):
+        changed_cells = []
+        for col in cur.columns:
+            if col not in prev.columns:
+                continue
+            try:
+                diff_mask = prev[col].fillna("__NA__").astype(str) != cur[col].fillna("__NA__").astype(str)
+                changed_idx = diff_mask[diff_mask].index[:3]
+                for idx in changed_idx:
+                    old_val = prev.at[idx, col]
+                    new_val = cur.at[idx, col]
+                    changed_cells.append(f"  - row {idx}, **{col}**: `{old_val}` → `{new_val}`")
+                    if len(changed_cells) >= 5:
+                        break
+            except Exception:
+                continue
+            if len(changed_cells) >= 5:
+                break
+        if changed_cells:
+            lines.append("- **Sample value changes:**")
+            lines.extend(changed_cells)
+
+    if len(lines) == 1:
+        lines.append("No visible changes detected.")
+
+    return "\n".join(lines)
+
+
 def _hitl_finish():
     """Score the current episode without waiting for done=True."""
     if _interactive_env is None or _interactive_env._state is None:
@@ -846,7 +986,7 @@ def run_benchmark():
     agent = RuleBasedAgent()
 
     rows = []
-    for task_id in ["task_easy", "task_medium", "task_hard", "task_expert", "task_multi"]:
+    for task_id in ["task_easy", "task_medium", "task_hard", "task_expert", "task_multi", "task_messy_contacts"]:
         obs = env.reset(task_id)
         agent.reset()
         done = False
@@ -928,6 +1068,7 @@ def create_dashboard() -> gr.Blocks:
                             ("Task 3 — Advanced Cleaning (Hard)", "task_hard"),
                             ("Task 4 — Budget-Constrained (Expert)", "task_expert"),
                             ("Task 5 — Multi-Table Cleaning (Expert+)", "task_multi"),
+                            ("Task 6 — Messy Contacts (Medium-Hard)", "task_messy_contacts"),
                         ],
                         value="task_easy",
                         label="Select Task",
@@ -1053,6 +1194,7 @@ def create_dashboard() -> gr.Blocks:
                             ("Task 3 — Advanced Cleaning (Hard)", "task_hard"),
                             ("Task 4 — Budget-Constrained (Expert)", "task_expert"),
                             ("Task 5 — Multi-Table Cleaning (Expert+)", "task_multi"),
+                            ("Task 6 — Messy Contacts (Medium-Hard)", "task_messy_contacts"),
                         ],
                         value="task_easy",
                         label="Select Task",
@@ -1105,8 +1247,14 @@ def create_dashboard() -> gr.Blocks:
                     hitl_new_value = gr.Textbox(label="New Value (replace_substring)", scale=1)
 
                 with gr.Row():
+                    hitl_preview_btn = gr.Button("Preview", variant="secondary", scale=1)
                     hitl_apply_btn = gr.Button("Apply Action", variant="primary", scale=1)
+                    hitl_undo_btn = gr.Button("Undo", variant="secondary", scale=1)
                     hitl_finish_btn = gr.Button("Finish & Score", variant="secondary", scale=1)
+
+                with gr.Row():
+                    hitl_diff_btn = gr.Button("Show Diff", variant="secondary")
+                hitl_diff_md = gr.Markdown()
 
                 hitl_score_html = gr.HTML()
 
@@ -1138,6 +1286,15 @@ def create_dashboard() -> gr.Blocks:
                     ],
                 )
 
+                hitl_preview_btn.click(
+                    fn=_hitl_preview,
+                    inputs=[
+                        hitl_action, hitl_column, hitl_method, hitl_constant,
+                        hitl_old_value, hitl_new_value, hitl_target_type,
+                    ],
+                    outputs=[hitl_status_md],
+                )
+
                 hitl_apply_btn.click(
                     fn=_hitl_step,
                     inputs=[
@@ -1145,6 +1302,18 @@ def create_dashboard() -> gr.Blocks:
                         hitl_old_value, hitl_new_value, hitl_target_type,
                     ],
                     outputs=[hitl_steps_table, hitl_preview, hitl_score_html, hitl_status_md],
+                )
+
+                hitl_undo_btn.click(
+                    fn=_hitl_undo,
+                    inputs=[],
+                    outputs=[hitl_steps_table, hitl_preview, hitl_score_html, hitl_status_md],
+                )
+
+                hitl_diff_btn.click(
+                    fn=_hitl_diff,
+                    inputs=[],
+                    outputs=[hitl_diff_md],
                 )
 
                 hitl_finish_btn.click(
