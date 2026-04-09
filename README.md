@@ -25,8 +25,8 @@ Data cleaning accounts for **60-80% of real-world data work**, yet there are ver
 
 ## Key Features
 
-- **8 structured cleaning actions** — fill nulls, drop duplicates, strip whitespace, replace substrings, convert types, map categorical values, normalize columns, and remove outliers
-- **4 difficulty-tiered tasks** — from basic null-filling (Easy) to tight-budget multi-issue cleaning with distractor columns (Expert)
+- **10 structured cleaning actions** — fill nulls, drop duplicates, strip whitespace, replace substrings, convert types, map categorical values, normalize columns, remove outliers, validate foreign keys, and lookup fill
+- **5 difficulty-tiered tasks** — from basic null-filling (Easy) to multi-table cross-FK cleaning (Expert+)
 - **Custom dataset support** — upload any CSV and auto-generate a cleaning task with ground truth at easy/medium/hard difficulty
 - **Interactive Gradio dashboard** — visual step-by-step demo at `/dashboard` with live table previews, quality progress tracking, and one-click baseline execution
 - **Exploit-resistant reward design** — high-water mark prevents apply-undo-apply oscillation; harmful and redundant actions are penalized
@@ -65,6 +65,8 @@ Data cleaning accounts for **60-80% of real-world data work**, yet there are ver
 | `convert_type` | `column`, `target_type` | 2 | Convert column dtype (int/float/datetime/string) |
 | `map_values` | `column`, `mapping` | 2 | Remap categorical values (e.g. yes/no/1/0 → True/False) |
 | `normalize` | `column`, `method` | 2 | Scale column values (minmax/zscore) |
+| `validate_foreign_key` | `column`, `table`, `foreign_key_column`, `lookup_table`, `lookup_key_column` | 2 | Remove rows with orphan FK references |
+| `lookup_fill` | `column`, `table`, `foreign_key_column`, `lookup_table`, `lookup_key_column`, `lookup_value_column` | 2 | Fill nulls via FK lookup from another table |
 | `remove_outliers` | `column` | 3 | Remove outliers using IQR x 1.5 rule |
 
 ### Reward Function
@@ -115,6 +117,7 @@ Termination conditions: max 20 steps, budget exhausted, or perfect quality (1.0)
 | `task_medium` | Medium | Transactions (300 rows, 6 cols) | Mixed date formats, currency strings `$1,234.56`, mixed booleans (yes/no/1/0/True/False) | 20 | ~0.92 |
 | `task_hard` | Hard | Medical trials (400 rows, 8 cols) | Outliers (IQR), mixed ID formats, year typos (2033→2023) | 20 | ~0.88 |
 | `task_expert` | Expert | E-commerce catalog (500 rows, 10 cols) | All issues combined + 5 distractor columns that are already clean | 15 | ~0.88 |
+| `task_multi` | Expert+ | Customers (100 rows) + Orders (300 rows) | Two linked tables with FK relationships, orphan keys, `$` amounts, nulls, duplicates, whitespace | 25 | ~0.86 |
 | `task_custom` | Custom | User-uploaded CSV | Auto-detected issues with configurable difficulty (easy/medium/hard) | 20 | — |
 
 ## Interactive Dashboard
@@ -160,6 +163,7 @@ python simulate.py
 | `GET` | `/state` | Get current internal state |
 | `GET` | `/grader` | Get final score after episode |
 | `GET` | `/tasks` | List available tasks and action schema |
+| `POST` | `/grade/{task_id}` | Stateless per-task grading |
 | `POST` | `/baseline` | Run rule-based baseline on all tasks |
 | `GET` | `/dashboard` | Interactive Gradio UI |
 
@@ -201,7 +205,8 @@ The rule-based baseline agent uses a deterministic 7-priority decision strategy 
 | Task 2 (Medium) | ~0.92 | 6 | 9 / 20 |
 | Task 3 (Hard) | ~0.88 | 4 | 9 / 20 |
 | Task 4 (Expert) | ~0.88 | 7 | 11 / 15 |
-| **Average** | **~0.90** | | |
+| Task 5 (Multi-Table) | ~0.86 | 13 | 17 / 25 |
+| **Average** | **~0.89** | | |
 
 ## Project Structure
 
@@ -214,7 +219,7 @@ cleanflow_env/
 │   ├── rule_agent.py         # Rule-based deterministic agent (7-priority strategy)
 │   └── run_baseline.py       # Baseline episode runner
 ├── env/
-│   ├── actions.py            # 8 cleaning functions + O(1) dispatcher
+│   ├── actions.py            # 10 cleaning functions + O(1) dispatcher
 │   ├── budget.py             # Budget cost table per action type
 │   ├── environment.py        # CleanFlowEnv core (reset/step/state)
 │   ├── grader.py             # Final 5-component scoring
@@ -230,6 +235,7 @@ cleanflow_env/
 │   ├── task_medium.py        # Schema normalization (300 rows, 6 cols)
 │   ├── task_hard.py          # Advanced cleaning (400 rows, 8 cols)
 │   ├── task_expert.py        # Budget-constrained (500 rows, 10 cols)
+│   ├── task_multi.py         # Multi-table cleaning (customers + orders, FK relationships)
 │   └── task_custom.py        # Custom CSV task generator with auto ground truth
 tests/
 ├── test_actions.py           # Unit tests for all 8 cleaning functions
@@ -268,7 +274,6 @@ Correctness is measured by comparing sorted column values rather than row-aligne
 
 ## Future Extensions
 
-- Multi-table joins with referential integrity checks
 - Streaming data cleaning (mini-batch episodes)
 - Noisy real-world datasets from public data portals
 - Human-in-the-loop feedback mode
