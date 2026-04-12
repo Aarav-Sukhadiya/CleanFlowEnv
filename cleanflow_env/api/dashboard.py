@@ -1217,6 +1217,7 @@ def create_dashboard() -> gr.Blocks:
                             "fill_null", "drop_duplicates", "strip_whitespace",
                             "replace_substring", "convert_type", "map_values",
                             "normalize", "remove_outliers", "standardize_format",
+                            "validate_foreign_key", "lookup_fill",
                         ],
                         value="fill_null",
                         label="Action Type",
@@ -1528,20 +1529,38 @@ def create_dashboard() -> gr.Blocks:
                     ```
                     `quality_overall = 0.6 * correctness + 0.3 * completeness + 0.1 * schema_accuracy`
 
+                    ### Built-in Tasks (6)
+                    - **Task 1 — Basic Cleaning (Easy)** · 200 rows · ~0.94
+                    - **Task 2 — Schema Normalization (Medium)** · 300 rows · ~0.92
+                    - **Task 3 — Advanced Cleaning (Hard)** · 400 rows · ~0.92
+                    - **Task 4 — Budget-Constrained (Expert)** · 500 rows · ~0.88
+                    - **Task 5 — Multi-Table Cleaning (Expert+)** · customers + orders · ~0.88
+                    - **Task 6 — Messy Contacts (Medium-Hard)** · 250 rows · ~0.91
+
+                    ### Interactive Mode Features
+                    - **Preview** — dry-run any action to see what would change without spending budget
+                    - **Apply** — commit an action and update the data
+                    - **Undo** — revert the last action's data changes (budget is NOT refunded)
+                    - **Show Diff** — see per-column null changes and sample value diffs after each action
+                    - **Finish & Score** — grade the episode at any time without waiting for done=True
+
                     ### API Endpoints
                     This Space also exposes a full OpenEnv-compliant API:
                     - `POST /reset` — Start a new episode
                     - `POST /step` — Apply an action
+                    - `POST /preview` — Dry-run an action (no budget spent)
+                    - `POST /undo` — Revert the last action (data only)
                     - `GET /state` — Get current state
                     - `GET /grader` — Get final score
                     - `POST /grade/{task_id}` — Stateless per-task grading
-                    - `GET /tasks` — List available tasks (5 tasks including multi-table)
-                    - `POST /baseline` — Run baseline agent
+                    - `GET /tasks` — List all 6 available tasks
+                    - `POST /baseline` — Run baseline agent across all tasks
 
                     ### MCP Integration
-                    CleanFlowEnv exposes cleaning tools via the **Model Context Protocol (MCP)**.
+                    CleanFlowEnv exposes **7 cleaning tools** via the **Model Context Protocol (MCP)**.
                     Any MCP-compatible agent (Claude, GPT, etc.) can connect to `/mcp` and use
-                    `reset_environment`, `apply_action`, `get_status`, `get_score`, and `get_data_preview`.
+                    `reset_environment`, `apply_action`, `preview_action`, `undo_action`,
+                    `get_status`, `get_score`, and `get_data_preview`.
 
                     ### Tech Stack
                     Python 3.10+ · FastAPI · Pydantic v2 · Pandas · NumPy · Gradio · FastMCP

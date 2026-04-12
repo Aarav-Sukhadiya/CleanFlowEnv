@@ -335,14 +335,27 @@ class CleanFlowEnv:
         if cost > state.budget_remaining:
             return {"valid": False, "error": "Insufficient budget", "cost": cost}
 
-        # Snapshot
-        before_df = state.current_table
-        before_tables = state.tables if state.is_multi_table else None
+        # Snapshot — copy to guarantee no in-place mutation leaks to state
+        before_df = state.current_table.copy()
+        before_tables = (
+            {k: v.copy() for k, v in state.tables.items()}
+            if state.is_multi_table and state.tables
+            else None
+        )
+
+        # For multi-table actions targeting a specific table, diff against that table
+        target_table = action.table if state.is_multi_table and action.table else state.primary_table
+        if state.is_multi_table and before_tables and target_table in before_tables:
+            before_df = before_tables[target_table].copy()
 
         try:
-            result = apply_action(before_df, action, tables=before_tables)
+            result = apply_action(
+                state.current_table.copy() if not state.is_multi_table else before_df,
+                action,
+                tables=before_tables,
+            )
             if isinstance(result, dict):
-                after_df = result.get(state.primary_table, before_df)
+                after_df = result.get(target_table, before_df)
             else:
                 after_df = result
         except InvalidActionError as e:
@@ -379,6 +392,10 @@ class CleanFlowEnv:
 
         state = self._state
         if state.step_count == 0 or state.prev_table is None:
+            return None
+
+        # Guard: if the most recent op is already undone, there's nothing to undo
+        if state.operations_history and state.operations_history[-1].get("undone"):
             return None
 
         # Revert data

@@ -330,9 +330,10 @@ class TestComputeQuality:
         assert quality["completeness"] < 0.5
 
     def test_empty_df_returns_zero(self):
-        """Empty dataframe should return 0.0 for all metrics."""
+        """Empty dataframe should return ~0 (clamped to epsilon) for all metrics."""
         quality = compute_quality(pd.DataFrame(), pd.DataFrame({"a": [1]}))
-        assert quality["overall"] == 0.0
+        # Scores are clamped to strict (0, 1) — epsilon (1e-4) is returned instead of 0.0
+        assert quality["overall"] < 0.01
 
     def test_dtype_mismatch_lowers_schema_accuracy(self):
         """Different dtypes should lower schema_accuracy."""
@@ -355,7 +356,8 @@ class TestValidation:
         df = pd.DataFrame({"a": [1, 2, 3], "b": [4.0, 5.0, 6.0]})
         descs = {"a": "Numeric. 2 missing values — fill with median.", "b": "Numeric."}
         result = validate_cleaned_data(df, df, descs)
-        assert result["validation_score"] == 1.0
+        # Score clamped to strict (0, 1) — perfect validation returns 0.9999
+        assert result["validation_score"] > 0.99
         assert len(result["violations"]) == 0
 
     def test_remaining_nulls_flagged(self):
