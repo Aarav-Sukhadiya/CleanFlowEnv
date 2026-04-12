@@ -13,7 +13,7 @@ cleanflow_env/
   api/          → FastAPI + Gradio dashboard
   env/          → Core environment (reset/step/state/grader/rewards/budget/validation)
   models/       → Pydantic v2 typed models (Action, Observation, Reward)
-  tasks/        → 4 built-in tasks + custom dataset support
+  tasks/        → 6 built-in tasks + custom dataset support
   baseline/     → Rule-based agent + LLM-based inference
 
 Top-level:
@@ -25,24 +25,27 @@ Top-level:
   smoke_test.py         → Quick smoke tests
   Dockerfile            → python:3.10-slim, exposes port 7860
   requirements.txt      → Dependencies
-  tests/                → 67 tests (models, actions, integration)
+  tests/                → 80 tests (models, actions, integration)
   Workflow/             → Project docs (Summary, Constraints, Prompts, SSTXMeta)
 ```
 
-## 8 Action Types
+## 11 Action Types
 
 | Action | Cost | What It Does |
 |--------|------|-------------|
-| `fill_null` | 1 | Fill missing values (mean/median/mode/constant/ffill/bfill) |
+| `fill_null` | 1 | Fill missing values (mean/median/mode/constant/ffill/bfill/sequential) |
 | `drop_duplicates` | 1 | Remove fully duplicate rows |
 | `strip_whitespace` | 1 | Strip leading/trailing whitespace from string column |
 | `replace_substring` | 1 | Replace substring in string values (e.g. "$" → "", "2033" → "2023") |
 | `convert_type` | 2 | Convert column dtype (int/float/datetime/string) |
 | `map_values` | 2 | Map categorical values via dict (e.g. "yes" → True, "no" → False) |
 | `normalize` | 2 | Min-max or z-score normalization |
-| `remove_outliers` | 3 | Remove rows outside IQR x 1.5 or Z-score bounds |
+| `standardize_format` | 2 | Standardize mixed-format ID columns to consistent prefix+number pattern |
+| `validate_foreign_key` | 2 | Remove rows with orphan FK references (multi-table) |
+| `lookup_fill` | 2 | Fill nulls via FK lookup from another table (multi-table) |
+| `remove_outliers` | 3 | Remove rows outside IQR x 1.5 bounds |
 
-## 4 Built-in Tasks
+## 6 Built-in Tasks
 
 | Task | Difficulty | Rows | Cols | Issues | Budget |
 |------|-----------|------|------|--------|--------|
@@ -50,6 +53,8 @@ Top-level:
 | task_medium | Medium | 300 | 6 | Mixed date formats, "$" currency strings, mixed booleans, trailing whitespace | 20 |
 | task_hard | Hard | 400 | 8 | Outliers in blood_pressure/cholesterol, mixed patient_id formats, year typos (2033→2023) | 20 |
 | task_expert | Expert | 500 | 10 | All issues combined + 5 distractor columns, tight budget | 15 |
+| task_multi | Expert+ | 100+300 | — | Two linked tables (customers + orders) with FK relationships, orphan keys, mixed formats | 25 |
+| task_messy_contacts | Medium-Hard | 250 | 7 | Whitespace in names, mixed phone formats, $ salary strings, mixed date formats, nulls, dups | 20 |
 
 ## Custom Dataset Support
 
@@ -123,16 +128,17 @@ score = 0.40 * quality_overall
 
 ## Baseline Agent (Rule-Based)
 
-**RuleBasedAgent** in `baseline/rule_agent.py` — deterministic, greedy decision priority:
+**RuleBasedAgent** in `baseline/rule_agent.py` — deterministic, greedy 8-priority decision:
 
-1. **Drop duplicates** whenever `duplicate_count > 0` (checked every step — null-filling creates new dups)
-2. **Fill nulls** using description-aware method selection:
-   - Numeric → median | Date-like → forward_fill | Identifier/categorical → constant "Unknown"
+1. **Validate FK** (multi-table) — remove orphan rows before further work
+2. **Drop duplicates** whenever `duplicate_count > 0` (checked every step — null-filling creates new dups)
 3. **Strip whitespace** on string columns that mention it
-4. **Replace substring** (e.g. "$" → "", "," → "", "2033" → "2023")
-5. **Map categorical values** (e.g. "yes"/"no" → True/False)
+4. **Standardize format** on mixed-format ID columns
+5. **Replace substring** (e.g. "$" → "", "," → "", "2033" → "2023")
 6. **Convert types** based on column descriptions (datetime, float)
-7. **Remove outliers** on numeric columns that mention outliers
+7. **Fill nulls** using description-aware method selection:
+   - Numeric → median | Date-like → forward_fill | Identifier/categorical → constant "Unknown"
+8. **Map categorical values** (e.g. "yes"/"no" → True/False) and **remove outliers** on columns that mention outliers
 
 ## Null-Filling Strategy
 
@@ -143,14 +149,16 @@ score = 0.40 * quality_overall
 | Identifier/name | Constant "Unknown" | name, department |
 | Other string | Constant "Unknown" | categorical columns |
 
-## Baseline Scores (67 tests passing)
+## Baseline Scores (80 tests passing)
 
 ```
-task_easy:   0.953 (6 steps, 6 budget)
-task_medium: 0.916 (6 steps, 9 budget)
-task_hard:   0.880 (4 steps, 9 budget)
-task_expert: 0.876 (7 steps, 11 budget)
-Average:     0.906
+task_easy:            0.940 (7 steps, 8 budget)
+task_medium:          0.916 (6 steps, 9 budget)
+task_hard:            0.917 (5 steps, 11 budget)
+task_expert:          0.876 (7 steps, 11 budget)
+task_multi:           0.881 (13 steps, 17 budget)
+task_messy_contacts:  0.905 (9 steps, 11 budget)
+Average:              0.906
 ```
 
 ## Key Design Decisions
@@ -169,7 +177,7 @@ Average:     0.906
 
 | File | Purpose |
 |------|---------|
-| `cleanflow_env/env/actions.py` | All 8 action implementations (IQR + Z-score outlier removal) |
+| `cleanflow_env/env/actions.py` | All 11 action implementations (IQR x 1.5 outlier rule) |
 | `cleanflow_env/models/action.py` | ActionModel with outlier_method/outlier_threshold fields |
 | `cleanflow_env/env/environment.py` | reset(), step(), build_observation() — obs uses current_table |
 | `cleanflow_env/env/state.py` | EnvironmentState dataclass (raw, gt, current, prev tables) |
@@ -182,9 +190,12 @@ Average:     0.906
 | `cleanflow_env/tasks/task_medium.py` | Medium task: 300 rows, mixed formats + whitespace |
 | `cleanflow_env/tasks/task_hard.py` | Hard task: 400 rows, outliers + typos |
 | `cleanflow_env/tasks/task_expert.py` | Expert task: 500 rows, all issues + distractors + tight budget |
+| `cleanflow_env/tasks/task_multi.py` | Multi-table task: customers + orders with FK relationships |
+| `cleanflow_env/tasks/task_messy_contacts.py` | Messy contacts: 250 rows, mixed phones, $ salaries, whitespace |
 | `cleanflow_env/tasks/task_custom.py` | Custom dataset — upfront date detection, dedup→fill→dedup→convert |
-| `cleanflow_env/api/dashboard.py` | Gradio dashboard with distribution comparison |
-| `cleanflow_env/api/main.py` | FastAPI endpoints |
+| `cleanflow_env/api/dashboard.py` | Gradio dashboard (6 tabs) with interactive HITL mode |
+| `cleanflow_env/api/main.py` | FastAPI endpoints (reset, step, preview, undo, state, grader, baseline) |
+| `cleanflow_env/api/mcp_server.py` | MCP tool server — 7 tools for LLM agent integration |
 | `inference.py` | LLM-based agent for hackathon submission |
 | `openenv.yaml` | OpenEnv spec metadata (v2.0) |
 | `run.py` | Entry point — uvicorn on :7860, auto-opens dashboard |
@@ -212,10 +223,10 @@ python validate_submission.py
 
 They judge the **environment quality**, not any AI model:
 - Real-world utility (30%) — data cleaning is genuine, underserved
-- Task & grader quality (25%) — 4 tasks, deterministic, difficulty progression
-- Environment design (20%) — budget mechanic, validation rules, distribution stats
-- Code quality & spec (15%) — typed models, 67 tests, Dockerfile, openenv.yaml
-- Creativity & novelty (10%) — budget mechanic, semantic hints, categorical handling
+- Task & grader quality (25%) — 6 tasks (incl. multi-table), deterministic, difficulty progression
+- Environment design (20%) — budget mechanic, validation rules, preview/undo, distribution stats
+- Code quality & spec (15%) — typed models, 80 tests, Dockerfile, openenv.yaml, MCP server
+- Creativity & novelty (10%) — budget mechanic, semantic hints, multi-table FK actions, HITL dashboard
 
 ## Key Dependencies
 

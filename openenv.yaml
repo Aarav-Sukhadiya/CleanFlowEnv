@@ -44,6 +44,10 @@ endpoints:
   baseline:
     path: /baseline
     method: POST
+  mcp:
+    path: /mcp
+    method: POST
+    description: "MCP tool discovery (lists 7 MCP tools exposed via /mcp/)"
 
 tasks:
   - id: task_easy

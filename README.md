@@ -40,8 +40,8 @@ Data cleaning accounts for **60-80% of real-world data work**, yet there are ver
 - **Budget-constrained actions** — each action type costs 1-3 credits, mirroring real ETL billing; agents must reason about ROI per action
 - **5-component grading** — final score combines quality, validation, efficiency, action quality, and schema accuracy
 - **Fully deterministic** — seeded data generation (seed 42), IQR x 1.5 outlier rule, reproducible across runs
-- **Comprehensive test suite** — 60+ unit, integration, and smoke tests
-- **Rule-based baseline agent** — deterministic 7-priority agent achieving ~0.90 average score, no API keys needed
+- **Comprehensive test suite** — 80 unit, integration, and smoke tests
+- **Rule-based baseline agent** — deterministic 8-priority agent achieving 0.906 average score, no API keys needed
 
 ## Environment Description
 
@@ -231,7 +231,7 @@ cleanflow_env/
 │   ├── dashboard.py          # Gradio interactive dashboard (6 tabs, mounted at /dashboard)
 │   └── mcp_server.py         # MCP tool server (7 tools for LLM agent integration)
 ├── baseline/
-│   ├── rule_agent.py         # Rule-based deterministic agent (7-priority strategy)
+│   ├── rule_agent.py         # Rule-based deterministic agent (8-priority strategy)
 │   └── run_baseline.py       # Baseline episode runner
 ├── env/
 │   ├── actions.py            # 11 cleaning functions + O(1) dispatcher
@@ -254,12 +254,12 @@ cleanflow_env/
 │   ├── task_messy_contacts.py # Messy contacts (250 rows, mixed phones, $ salaries, whitespace)
 │   └── task_custom.py        # Custom CSV task generator with auto ground truth
 tests/
-├── test_actions.py           # Unit tests for all 8 cleaning functions
+├── test_actions.py           # Unit tests for all 11 cleaning functions (+ quality/validation)
 ├── test_models.py            # Pydantic model validation tests
 └── test_integration.py       # Full episode end-to-end tests
-smoke_test.py                 # 5-check pre-submission smoke test
+smoke_test.py                 # 6-check pre-submission smoke test
 simulate.py                   # In-process simulation (no HTTP)
-inference.py                  # LLM-based agent (HF Inference API)
+inference.py                  # LLM-based agent (OpenAI-compatible, HF Inference API)
 Dockerfile                    # Python 3.11-slim, FastAPI on port 7860
 openenv.yaml                  # OpenEnv compliance spec
 requirements.txt              # Runtime dependencies
